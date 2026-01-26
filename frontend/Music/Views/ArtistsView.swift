@@ -301,6 +301,10 @@ struct ArtistsView: View {
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
+
+                    Spacer()
+
+                    ArtistFavoriteButton(artist: artist)
                 }
                 .padding(.vertical, 4)
             }
@@ -429,6 +433,11 @@ struct ArtistDetailView: View {
             }
         }
         .navigationTitle(artist.name)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                ArtistFavoriteButton(artist: artist)
+            }
+        }
     }
 }
 
@@ -600,6 +609,10 @@ struct AlbumTrackRow: View {
         playerService.currentTrack?.id == track.id
     }
 
+    private var isFavorite: Bool {
+        FavoritesStore.shared.isTrackFavorite(track.s3Key)
+    }
+
     var body: some View {
         HStack {
             // Now playing indicator or track number
@@ -629,6 +642,14 @@ struct AlbumTrackRow: View {
 
             Spacer()
 
+            Button {
+                FavoritesStore.shared.toggleTrackFavorite(track)
+            } label: {
+                Image(systemName: isFavorite ? "heart.fill" : "heart")
+                    .foregroundStyle(isFavorite ? .red : .secondary)
+            }
+            .buttonStyle(.plain)
+
             if !isPlayable {
                 Image(systemName: "arrow.down.circle")
                     .foregroundStyle(.secondary)
@@ -640,6 +661,24 @@ struct AlbumTrackRow: View {
                 .foregroundStyle(.secondary)
         }
         .opacity(isPlayable ? 1.0 : 0.5)
+    }
+}
+
+struct ArtistFavoriteButton: View {
+    let artist: Artist
+
+    private var isFavorite: Bool {
+        FavoritesStore.shared.isArtistFavorite(artist.id)
+    }
+
+    var body: some View {
+        Button {
+            FavoritesStore.shared.toggleArtistFavorite(artist)
+        } label: {
+            Image(systemName: isFavorite ? "heart.fill" : "heart")
+                .foregroundStyle(isFavorite ? .red : .secondary)
+        }
+        .buttonStyle(.plain)
     }
 }
 

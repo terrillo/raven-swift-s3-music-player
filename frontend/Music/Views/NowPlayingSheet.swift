@@ -47,10 +47,23 @@ struct NowPlayingSheet: View {
 
                 // Track Info
                 VStack(spacing: 8) {
-                    Text(playerService.currentTrack?.title ?? "Not Playing")
-                        .font(.title2)
-                        .fontWeight(.bold)
-                        .lineLimit(1)
+                    HStack(spacing: 12) {
+                        Text(playerService.currentTrack?.title ?? "Not Playing")
+                            .font(.title2)
+                            .fontWeight(.bold)
+                            .lineLimit(1)
+
+                        if let track = playerService.currentTrack {
+                            Button {
+                                FavoritesStore.shared.toggleTrackFavorite(track)
+                            } label: {
+                                Image(systemName: FavoritesStore.shared.isTrackFavorite(track.s3Key) ? "heart.fill" : "heart")
+                                    .font(.title2)
+                                    .foregroundStyle(FavoritesStore.shared.isTrackFavorite(track.s3Key) ? .red : .secondary)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
 
                     // Artist button -> navigates to ArtistDetailView
                     if let artist = currentArtist {

@@ -13,6 +13,28 @@ struct PlaylistView: View {
     var body: some View {
         NavigationStack {
             List {
+                Section("Favorites") {
+                    NavigationLink {
+                        FavoriteArtistsView(
+                            musicService: musicService,
+                            playerService: playerService,
+                            cacheService: cacheService
+                        )
+                    } label: {
+                        Label("Favorite Artists", systemImage: "heart.fill")
+                    }
+
+                    NavigationLink {
+                        FavoriteTracksView(
+                            musicService: musicService,
+                            playerService: playerService,
+                            cacheService: cacheService
+                        )
+                    } label: {
+                        Label("Favorite Songs", systemImage: "heart.fill")
+                    }
+                }
+
                 Section("Auto Playlists") {
                     NavigationLink {
                         Top100View(
@@ -48,6 +70,140 @@ struct PlaylistView: View {
                 }
             }
         }
+    }
+}
+
+struct FavoriteArtistsView: View {
+    var musicService: MusicService
+    var playerService: PlayerService
+    var cacheService: CacheService?
+
+    private var favoriteArtists: [Artist] {
+        let favoriteEntities = FavoritesStore.shared.fetchFavoriteArtists()
+        return favoriteEntities.compactMap { entity in
+            guard let artistId = entity.artistId else { return nil }
+            return musicService.artists.first { $0.id == artistId }
+        }
+    }
+
+    var body: some View {
+        Group {
+            if favoriteArtists.isEmpty {
+                ContentUnavailableView(
+                    "No Favorite Artists",
+                    systemImage: "heart",
+                    description: Text("Tap the heart icon on any artist to add them to your favorites")
+                )
+            } else {
+                List(favoriteArtists) { artist in
+                    NavigationLink {
+                        ArtistDetailView(artist: artist, musicService: musicService, playerService: playerService, cacheService: cacheService)
+                    } label: {
+                        HStack(spacing: 12) {
+                            ArtworkImage(
+                                url: artist.imageUrl,
+                                size: 56,
+                                systemImage: "music.mic",
+                                localURL: cacheService?.localArtworkURL(for: artist.imageUrl ?? ""),
+                                cacheService: cacheService
+                            )
+
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(artist.name)
+                                    .font(.headline)
+
+                                let songCount = artist.albums.flatMap { $0.tracks }.count
+                                Text("\(artist.albums.count) albums · \(songCount) songs")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                            }
+
+                            Spacer()
+
+                            ArtistFavoriteButton(artist: artist)
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+            }
+        }
+        .navigationTitle("Favorite Artists")
+    }
+}
+
+struct FavoriteTracksView: View {
+    var musicService: MusicService
+    var playerService: PlayerService
+    var cacheService: CacheService?
+
+    private var favoriteTracks: [Track] {
+        let favoriteEntities = FavoritesStore.shared.fetchFavoriteTracks()
+        return favoriteEntities.compactMap { entity in
+            guard let s3Key = entity.trackS3Key else { return nil }
+            return musicService.songs.first { $0.s3Key == s3Key }
+        }
+    }
+
+    private var firstPlayableTrack: Track? {
+        favoriteTracks.first { playerService.isTrackPlayable($0) }
+    }
+
+    private var hasPlayableTracks: Bool {
+        firstPlayableTrack != nil
+    }
+
+    var body: some View {
+        Group {
+            if favoriteTracks.isEmpty {
+                ContentUnavailableView(
+                    "No Favorite Songs",
+                    systemImage: "heart",
+                    description: Text("Tap the heart icon on any song to add it to your favorites")
+                )
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        // Shuffle button
+                        Button {
+                            if let track = firstPlayableTrack {
+                                if !playerService.isShuffled {
+                                    playerService.toggleShuffle()
+                                }
+                                playerService.play(track: track, queue: favoriteTracks)
+                            }
+                        } label: {
+                            Label("Shuffle", systemImage: "shuffle")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(!hasPlayableTracks)
+                        .padding(.horizontal)
+                        .padding(.vertical, 8)
+
+                        Divider()
+
+                        ForEach(favoriteTracks) { track in
+                            let isPlayable = playerService.isTrackPlayable(track)
+                            Button {
+                                if isPlayable {
+                                    playerService.play(track: track, queue: favoriteTracks)
+                                }
+                            } label: {
+                                SongRow(track: track, playerService: playerService, cacheService: cacheService, isPlayable: isPlayable)
+                                    .padding(.horizontal)
+                                    .padding(.vertical, 8)
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(!isPlayable)
+
+                            Divider()
+                                .padding(.leading, 60)
+                        }
+                    }
+                }
+            }
+        }
+        .navigationTitle("Favorite Songs")
     }
 }
 
