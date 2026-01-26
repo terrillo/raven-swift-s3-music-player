@@ -12,6 +12,7 @@ class FavoritesStore {
     static let shared = FavoritesStore()
 
     private(set) var favoriteArtistIds: Set<String> = []
+    private(set) var favoriteAlbumIds: Set<String> = []
     private(set) var favoriteTrackKeys: Set<String> = []
 
     private var viewContext: NSManagedObjectContext { AnalyticsStore.shared.viewContext }
@@ -57,6 +58,45 @@ class FavoritesStore {
             saveAndUpdate()
         } catch {
             print("Failed to remove artist favorite: \(error)")
+        }
+    }
+
+    // MARK: - Album Favorites
+
+    func isAlbumFavorite(_ albumId: String) -> Bool {
+        favoriteAlbumIds.contains(albumId)
+    }
+
+    func toggleAlbumFavorite(_ album: Album) {
+        if isAlbumFavorite(album.id) {
+            removeAlbumFavorite(album.id)
+        } else {
+            addAlbumFavorite(album)
+        }
+    }
+
+    private func addAlbumFavorite(_ album: Album) {
+        let entity = FavoriteAlbumEntity(context: viewContext)
+        entity.albumId = album.id
+        entity.albumName = album.name
+        entity.artistName = album.tracks.first?.artist
+        entity.favoritedAt = Date()
+
+        saveAndUpdate()
+    }
+
+    private func removeAlbumFavorite(_ albumId: String) {
+        let request = NSFetchRequest<FavoriteAlbumEntity>(entityName: "FavoriteAlbumEntity")
+        request.predicate = NSPredicate(format: "albumId == %@", albumId)
+
+        do {
+            let results = try viewContext.fetch(request)
+            for entity in results {
+                viewContext.delete(entity)
+            }
+            saveAndUpdate()
+        } catch {
+            print("Failed to remove album favorite: \(error)")
         }
     }
 
@@ -115,6 +155,13 @@ class FavoritesStore {
         return (try? viewContext.fetch(request)) ?? []
     }
 
+    func fetchFavoriteAlbums() -> [FavoriteAlbumEntity] {
+        let request = NSFetchRequest<FavoriteAlbumEntity>(entityName: "FavoriteAlbumEntity")
+        request.sortDescriptors = [NSSortDescriptor(keyPath: \FavoriteAlbumEntity.favoritedAt, ascending: false)]
+
+        return (try? viewContext.fetch(request)) ?? []
+    }
+
     // MARK: - Private Helpers
 
     private func saveAndUpdate() {
@@ -131,6 +178,12 @@ class FavoritesStore {
         let artistRequest = NSFetchRequest<FavoriteArtistEntity>(entityName: "FavoriteArtistEntity")
         if let artists = try? viewContext.fetch(artistRequest) {
             favoriteArtistIds = Set(artists.compactMap { $0.artistId })
+        }
+
+        // Load album favorites
+        let albumRequest = NSFetchRequest<FavoriteAlbumEntity>(entityName: "FavoriteAlbumEntity")
+        if let albums = try? viewContext.fetch(albumRequest) {
+            favoriteAlbumIds = Set(albums.compactMap { $0.albumId })
         }
 
         // Load track favorites

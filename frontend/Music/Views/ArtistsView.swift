@@ -160,17 +160,32 @@ struct AlbumGridCard: View {
     var localArtworkURL: URL?
     var cacheService: CacheService?
 
+    private var isFavorite: Bool {
+        FavoritesStore.shared.isAlbumFavorite(album.id)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ArtworkImage(
-                url: album.imageUrl,
-                size: 160,
-                systemImage: "square.stack",
-                localURL: localArtworkURL,
-                cacheService: cacheService
-            )
-            .frame(maxWidth: .infinity)
-            .aspectRatio(1, contentMode: .fit)
+            ZStack(alignment: .topTrailing) {
+                ArtworkImage(
+                    url: album.imageUrl,
+                    size: 160,
+                    systemImage: "square.stack",
+                    localURL: localArtworkURL,
+                    cacheService: cacheService
+                )
+                .frame(maxWidth: .infinity)
+                .aspectRatio(1, contentMode: .fit)
+
+                if isFavorite {
+                    Image(systemName: "heart.fill")
+                        .foregroundStyle(.red)
+                        .padding(6)
+                        .background(.ultraThinMaterial)
+                        .clipShape(Circle())
+                        .padding(6)
+                }
+            }
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(album.name)
@@ -624,6 +639,11 @@ struct AlbumDetailView: View {
             }
         }
         .navigationTitle(album.name)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                AlbumFavoriteButton(album: album)
+            }
+        }
     }
 }
 

@@ -25,6 +25,16 @@ struct PlaylistView: View {
                     }
 
                     NavigationLink {
+                        FavoriteAlbumsView(
+                            musicService: musicService,
+                            playerService: playerService,
+                            cacheService: cacheService
+                        )
+                    } label: {
+                        Label("Favorite Albums", systemImage: "heart.fill")
+                    }
+
+                    NavigationLink {
                         FavoriteTracksView(
                             musicService: musicService,
                             playerService: playerService,
@@ -128,6 +138,69 @@ struct FavoriteArtistsView: View {
             }
         }
         .navigationTitle("Favorite Artists")
+    }
+}
+
+struct FavoriteAlbumsView: View {
+    var musicService: MusicService
+    var playerService: PlayerService
+    var cacheService: CacheService?
+
+    private var favoriteAlbums: [Album] {
+        let favoriteEntities = FavoritesStore.shared.fetchFavoriteAlbums()
+        return favoriteEntities.compactMap { entity in
+            guard let albumId = entity.albumId else { return nil }
+            return musicService.albums.first { $0.id == albumId }
+        }
+    }
+
+    var body: some View {
+        Group {
+            if favoriteAlbums.isEmpty {
+                ContentUnavailableView(
+                    "No Favorite Albums",
+                    systemImage: "heart",
+                    description: Text("Tap the heart icon on any album to add it to your favorites")
+                )
+            } else {
+                List(favoriteAlbums) { album in
+                    NavigationLink {
+                        AlbumDetailView(album: album, musicService: musicService, playerService: playerService, cacheService: cacheService)
+                    } label: {
+                        HStack(spacing: 12) {
+                            ArtworkImage(
+                                url: album.imageUrl,
+                                size: 56,
+                                systemImage: "square.stack",
+                                localURL: cacheService?.localArtworkURL(for: album.imageUrl ?? ""),
+                                cacheService: cacheService
+                            )
+
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(album.name)
+                                    .font(.headline)
+
+                                if let artist = album.tracks.first?.artist {
+                                    Text(artist)
+                                        .font(.subheadline)
+                                        .foregroundStyle(.secondary)
+                                }
+
+                                Text("\(album.tracks.count) songs")
+                                    .font(.caption)
+                                    .foregroundStyle(.tertiary)
+                            }
+
+                            Spacer()
+
+                            AlbumFavoriteButton(album: album)
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+            }
+        }
+        .navigationTitle("Favorite Albums")
     }
 }
 
