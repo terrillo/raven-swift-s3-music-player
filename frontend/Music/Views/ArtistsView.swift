@@ -107,17 +107,32 @@ struct ArtistGridCard: View {
         artist.albums.reduce(0) { $0 + $1.tracks.count }
     }
 
+    private var isFavorite: Bool {
+        FavoritesStore.shared.isArtistFavorite(artist.id)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ArtworkImage(
-                url: artist.imageUrl,
-                size: 160,
-                systemImage: "music.mic",
-                localURL: localArtworkURL,
-                cacheService: cacheService
-            )
-            .frame(maxWidth: .infinity)
-            .aspectRatio(1, contentMode: .fit)
+            ZStack(alignment: .topTrailing) {
+                ArtworkImage(
+                    url: artist.imageUrl,
+                    size: 160,
+                    systemImage: "music.mic",
+                    localURL: localArtworkURL,
+                    cacheService: cacheService
+                )
+                .frame(maxWidth: .infinity)
+                .aspectRatio(1, contentMode: .fit)
+
+                if isFavorite {
+                    Image(systemName: "heart.fill")
+                        .foregroundStyle(.red)
+                        .padding(6)
+                        .background(.ultraThinMaterial)
+                        .clipShape(Circle())
+                        .padding(6)
+                }
+            }
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(artist.name)
@@ -212,6 +227,18 @@ struct ArtistsView: View {
         GridItem(.adaptive(minimum: 160, maximum: 200), spacing: 16)
     ]
 
+    private var sortedArtists: [Artist] {
+        let favorites = FavoritesStore.shared.favoriteArtistIds
+        return musicService.artists.sorted { a, b in
+            let aIsFavorite = favorites.contains(a.id)
+            let bIsFavorite = favorites.contains(b.id)
+            if aIsFavorite != bIsFavorite {
+                return aIsFavorite
+            }
+            return a.name < b.name
+        }
+    }
+
     var body: some View {
         NavigationStack(path: $navigationPath) {
             Group {
@@ -279,7 +306,7 @@ struct ArtistsView: View {
     }
 
     private var artistListView: some View {
-        List(musicService.artists) { artist in
+        List(sortedArtists) { artist in
             NavigationLink {
                 ArtistDetailView(artist: artist, musicService: musicService, playerService: playerService, cacheService: cacheService)
             } label: {
@@ -314,7 +341,7 @@ struct ArtistsView: View {
     private var artistGridView: some View {
         ScrollView {
             LazyVGrid(columns: gridColumns, spacing: 16) {
-                ForEach(musicService.artists) { artist in
+                ForEach(sortedArtists) { artist in
                     NavigationLink {
                         ArtistDetailView(artist: artist, musicService: musicService, playerService: playerService, cacheService: cacheService)
                     } label: {
