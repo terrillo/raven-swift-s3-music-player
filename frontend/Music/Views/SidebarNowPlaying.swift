@@ -48,7 +48,7 @@ struct SidebarNowPlaying: View {
                 .buttonStyle(.plain)
 
                 // Playback controls row
-                HStack(spacing: 20) {
+                HStack(spacing: 16) {
                     Button {
                         playerService.previous()
                     } label: {
@@ -70,6 +70,17 @@ struct SidebarNowPlaying: View {
                     } label: {
                         Image(systemName: "forward.fill")
                             .font(.body)
+                    }
+                    .buttonStyle(.plain)
+
+                    Spacer()
+
+                    Button {
+                        FavoritesStore.shared.toggleTrackFavorite(track)
+                    } label: {
+                        Image(systemName: FavoritesStore.shared.isTrackFavorite(track.s3Key) ? "heart.fill" : "heart")
+                            .font(.body)
+                            .foregroundStyle(FavoritesStore.shared.isTrackFavorite(track.s3Key) ? .red : .secondary)
                     }
                     .buttonStyle(.plain)
                 }

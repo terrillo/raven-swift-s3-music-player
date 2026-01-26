@@ -13,6 +13,9 @@ enum Tab: String, CaseIterable {
     case genres = "Genres"
     case songs = "Songs"
     case playlists = "Playlists"
+    #if os(macOS)
+    case search = "Search"
+    #endif
     case settings = "Cloud"
 
     var icon: String {
@@ -21,6 +24,9 @@ enum Tab: String, CaseIterable {
         case .genres: return "guitars"
         case .songs: return "music.note"
         case .playlists: return "music.note.square.stack"
+        #if os(macOS)
+        case .search: return "magnifyingglass"
+        #endif
         case .settings: return "icloud.fill"
         }
     }
@@ -93,7 +99,7 @@ struct ContentView: View {
                 }
             }
             .sheet(isPresented: $showingSearch) {
-                SearchView()
+                SearchView(musicService: musicService, playerService: playerService, cacheService: cacheService)
             }
             .sheet(isPresented: $showingPlayer) {
                 NowPlayingSheet(playerService: playerService, musicService: musicService, cacheService: cacheService)
@@ -150,13 +156,18 @@ struct ContentView: View {
                         SongsView(showingSearch: $showingSearch, musicService: musicService, playerService: playerService, cacheService: cacheService)
                     case .playlists:
                         PlaylistView(showingSearch: $showingSearch, musicService: musicService, playerService: playerService, cacheService: cacheService)
+                    case .search:
+                        SearchView(musicService: musicService, playerService: playerService, cacheService: cacheService)
                     case .settings:
                         SettingsView(showingSearch: $showingSearch, cacheService: cacheService ?? CacheService(modelContext: modelContext), musicService: musicService)
                     }
                 }
             }
-            .sheet(isPresented: $showingSearch) {
-                SearchView()
+            .onChange(of: showingSearch) { _, newValue in
+                if newValue {
+                    selectedTab = .search
+                    showingSearch = false
+                }
             }
             #endif
             }
