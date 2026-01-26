@@ -17,7 +17,15 @@ struct MusicCatalog: Codable {
     }
 }
 
-struct Artist: Codable, Identifiable {
+struct Artist: Codable, Identifiable, Hashable {
+    static func == (lhs: Artist, rhs: Artist) -> Bool {
+        lhs.id == rhs.id
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+    }
+
     // Use s3Key prefix from first track for unique ID (falls back to name)
     var id: String {
         albums.first?.tracks.first?.s3Key.components(separatedBy: "/").first ?? name
@@ -44,7 +52,15 @@ struct Artist: Codable, Identifiable {
     }
 }
 
-struct Album: Codable, Identifiable {
+struct Album: Codable, Identifiable, Hashable {
+    static func == (lhs: Album, rhs: Album) -> Bool {
+        lhs.id == rhs.id
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+    }
+
     // Use first two path components from s3Key for unique ID (Artist/Album)
     var id: String {
         guard let s3Key = tracks.first?.s3Key else { return name }

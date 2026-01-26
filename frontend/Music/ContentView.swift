@@ -34,6 +34,7 @@ struct ContentView: View {
     @State private var musicService = MusicService()
     @State private var playerService = PlayerService()
     @State private var cacheService: CacheService?
+    @State private var pendingNavigation: NavigationDestination? = nil
 
     var body: some View {
         VStack(spacing: 0) {
@@ -56,7 +57,7 @@ struct ContentView: View {
             Group {
                 #if os(iOS)
                 TabView(selection: $selectedTab) {
-                ArtistsView(showingSearch: $showingSearch, musicService: musicService, playerService: playerService, cacheService: cacheService)
+                ArtistsView(showingSearch: $showingSearch, musicService: musicService, playerService: playerService, cacheService: cacheService, pendingNavigation: .constant(nil))
                     .tabItem {
                         Image(systemName: "person.3.sequence.fill")
                     }
@@ -122,24 +123,40 @@ struct ContentView: View {
                     }
                 }
             } detail: {
-                switch selectedTab {
-                case .artists:
-                    ArtistsView(showingSearch: $showingSearch, musicService: musicService, playerService: playerService, cacheService: cacheService)
-                case .genres:
-                    GenreView(showingSearch: $showingSearch, musicService: musicService, playerService: playerService, cacheService: cacheService)
-                case .songs:
-                    SongsView(showingSearch: $showingSearch, musicService: musicService, playerService: playerService, cacheService: cacheService)
-                case .playlists:
-                    PlaylistView(showingSearch: $showingSearch, musicService: musicService, playerService: playerService, cacheService: cacheService)
-                case .settings:
-                    SettingsView(showingSearch: $showingSearch, cacheService: cacheService ?? CacheService(modelContext: modelContext), musicService: musicService)
+                if showingPlayer {
+                    NowPlayingDetailView(
+                        playerService: playerService,
+                        musicService: musicService,
+                        cacheService: cacheService,
+                        showingPlayer: $showingPlayer,
+                        onNavigateToArtist: { artist in
+                            pendingNavigation = .artist(artist)
+                            showingPlayer = false
+                            selectedTab = .artists
+                        },
+                        onNavigateToAlbum: { album, artist in
+                            pendingNavigation = .album(album, artist)
+                            showingPlayer = false
+                            selectedTab = .artists
+                        }
+                    )
+                } else {
+                    switch selectedTab {
+                    case .artists:
+                        ArtistsView(showingSearch: $showingSearch, musicService: musicService, playerService: playerService, cacheService: cacheService, pendingNavigation: $pendingNavigation)
+                    case .genres:
+                        GenreView(showingSearch: $showingSearch, musicService: musicService, playerService: playerService, cacheService: cacheService)
+                    case .songs:
+                        SongsView(showingSearch: $showingSearch, musicService: musicService, playerService: playerService, cacheService: cacheService)
+                    case .playlists:
+                        PlaylistView(showingSearch: $showingSearch, musicService: musicService, playerService: playerService, cacheService: cacheService)
+                    case .settings:
+                        SettingsView(showingSearch: $showingSearch, cacheService: cacheService ?? CacheService(modelContext: modelContext), musicService: musicService)
+                    }
                 }
             }
             .sheet(isPresented: $showingSearch) {
                 SearchView()
-            }
-            .sheet(isPresented: $showingPlayer) {
-                NowPlayingSheet(playerService: playerService, musicService: musicService, cacheService: cacheService)
             }
             #endif
             }

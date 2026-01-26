@@ -203,15 +203,17 @@ struct ArtistsView: View {
     var musicService: MusicService
     var playerService: PlayerService
     var cacheService: CacheService?
+    @Binding var pendingNavigation: NavigationDestination?
 
     @AppStorage("artistsViewMode") private var viewMode: ViewMode = .list
+    @State private var navigationPath = NavigationPath()
 
     private let gridColumns = [
         GridItem(.adaptive(minimum: 160, maximum: 200), spacing: 16)
     ]
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $navigationPath) {
             Group {
                 if musicService.isLoading {
                     ProgressView("Loading...")
@@ -245,10 +247,10 @@ struct ArtistsView: View {
                     }
                 }
                 .sharedBackgroundVisibility(.hidden)
-                        
-                        
+
+
                 ToolbarSpacer(.fixed, placement: .primaryAction)
-                
+
                 ToolbarItem(placement: .primaryAction) {
                     Button {
                         showingSearch = true
@@ -257,6 +259,22 @@ struct ArtistsView: View {
                     }
                 }
             }
+            .navigationDestination(for: NavigationDestination.self) { destination in
+                switch destination {
+                case .artist(let artist):
+                    ArtistDetailView(artist: artist, musicService: musicService, playerService: playerService, cacheService: cacheService)
+                case .album(let album, _):
+                    AlbumDetailView(album: album, musicService: musicService, playerService: playerService, cacheService: cacheService)
+                }
+            }
+        }
+        .task(id: pendingNavigation) {
+            guard let destination = pendingNavigation else { return }
+            // Small delay to ensure NavigationStack is ready
+            try? await Task.sleep(for: .milliseconds(150))
+            navigationPath = NavigationPath()
+            navigationPath.append(destination)
+            pendingNavigation = nil
         }
     }
 
@@ -626,5 +644,5 @@ struct AlbumTrackRow: View {
 }
 
 #Preview {
-    ArtistsView(showingSearch: .constant(false), musicService: MusicService(), playerService: PlayerService())
+    ArtistsView(showingSearch: .constant(false), musicService: MusicService(), playerService: PlayerService(), pendingNavigation: .constant(nil))
 }
