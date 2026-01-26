@@ -32,7 +32,7 @@ struct MusicApp: App {
         WindowGroup {
             ContentView()
                 .preferredColorScheme(.dark)
-                .tint(.yellow)
+                .tint(.appAccent)
         }
         .modelContainer(sharedModelContainer)
     }

@@ -39,7 +39,7 @@ struct CacheDownloadView: View {
                                     .frame(maxWidth: .infinity)
                             }
                             .buttonStyle(.borderedProminent)
-                            .tint(.yellow)
+                            .tint(.appAccent)
                             .controlSize(.large)
                         }
                     } else {
@@ -54,7 +54,7 @@ struct CacheDownloadView: View {
                         }
 
                         ProgressView(value: cacheService.currentProgress)
-                            .tint(.yellow)
+                            .tint(.appAccent)
                     }
                 }
                 .padding()
@@ -100,7 +100,7 @@ struct CacheDownloadView: View {
                                     .frame(maxWidth: .infinity)
                             }
                             .buttonStyle(.borderedProminent)
-                            .tint(.yellow)
+                            .tint(.appAccent)
                             .controlSize(.large)
                         }
                     }
@@ -151,7 +151,7 @@ struct TrackDownloadRow: View {
                 // Progress bar for downloading state
                 if case .downloading(let progress) = status {
                     ProgressView(value: progress)
-                        .tint(.yellow)
+                        .tint(.appAccent)
                 }
             }
 
@@ -180,7 +180,7 @@ struct TrackDownloadRow: View {
                 .foregroundStyle(.red)
         case .cached:
             Image(systemName: "checkmark.circle.fill")
-                .foregroundStyle(.yellow)
+                .foregroundStyle(Color.appAccent)
         }
     }
 
@@ -194,7 +194,7 @@ struct TrackDownloadRow: View {
         case .downloading(let progress):
             Text("\(Int(progress * 100))%")
                 .font(.caption)
-                .foregroundStyle(.yellow)
+                .foregroundStyle(Color.appAccent)
                 .monospacedDigit()
         case .completed:
             Text("Done")
@@ -208,7 +208,7 @@ struct TrackDownloadRow: View {
         case .cached:
             Text("Cached")
                 .font(.caption)
-                .foregroundStyle(.yellow)
+                .foregroundStyle(Color.appAccent)
         }
     }
 }

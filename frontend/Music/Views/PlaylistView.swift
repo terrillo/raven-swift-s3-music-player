@@ -153,7 +153,7 @@ struct Top100Row: View {
             // Rank number
             Text("\(rank)")
                 .font(.headline)
-                .foregroundStyle(isCurrentTrack ? .yellow : .secondary)
+                .foregroundStyle(isCurrentTrack ? Color.appAccent : .secondary)
                 .frame(width: 30)
 
             // Album artwork with now playing indicator
@@ -177,7 +177,7 @@ struct Top100Row: View {
             VStack(alignment: .leading) {
                 Text(track.title)
                     .font(.headline)
-                    .foregroundStyle(isCurrentTrack ? .yellow : (isPlayable ? .primary : .secondary))
+                    .foregroundStyle(isCurrentTrack ? Color.appAccent : (isPlayable ? .primary : .secondary))
                 HStack {
                     if let artist = track.artist {
                         Text(artist)

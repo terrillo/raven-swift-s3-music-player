@@ -133,7 +133,7 @@ struct SongRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(track.title)
                     .font(.headline)
-                    .foregroundStyle(isCurrentTrack ? .yellow : (isPlayable ? .primary : .secondary))
+                    .foregroundStyle(isCurrentTrack ? Color.appAccent : (isPlayable ? .primary : .secondary))
                     .lineLimit(1)
                 if let artist = track.artist {
                     Text(artist)

@@ -124,7 +124,7 @@ struct StatCard: View {
         VStack(spacing: 8) {
             Image(systemName: icon)
                 .font(.title2)
-                .foregroundStyle(.yellow)
+                .foregroundStyle(Color.appAccent)
             Text(value)
                 .font(.title2.bold())
             Text(title)
@@ -153,7 +153,7 @@ struct GenreChart: View {
                 x: .value("Plays", genre.playCount),
                 y: .value("Genre", genre.genre)
             )
-            .foregroundStyle(.yellow.gradient)
+            .foregroundStyle(Color.appAccent.gradient)
             .annotation(position: .trailing) {
                 Text("\(genre.playCount)")
                     .font(.caption2)
@@ -181,7 +181,7 @@ struct ActivityChart: View {
                 x: .value("Date", item.date, unit: .day),
                 y: .value("Plays", item.count)
             )
-            .foregroundStyle(.yellow.gradient)
+            .foregroundStyle(Color.appAccent.gradient)
         }
         .chartXAxis {
             AxisMarks(values: .stride(by: .day, count: period == .week ? 1 : 7)) { _ in

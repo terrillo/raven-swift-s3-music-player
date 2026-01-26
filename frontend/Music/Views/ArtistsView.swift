@@ -525,7 +525,7 @@ struct AlbumDetailView: View {
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(.yellow)
+                .tint(.appAccent)
                 .disabled(!hasPlayableTracks)
 
                 Button {
@@ -587,7 +587,7 @@ struct AlbumTrackRow: View {
             // Now playing indicator or track number
             if isCurrentTrack {
                 Image(systemName: playerService.isPlaying ? "speaker.wave.2.fill" : "speaker.fill")
-                    .foregroundStyle(.yellow)
+                    .foregroundStyle(Color.appAccent)
                     .frame(width: 30)
             } else if let trackNumber = track.trackNumber {
                 Text("\(trackNumber)")
@@ -601,7 +601,7 @@ struct AlbumTrackRow: View {
             VStack(alignment: .leading) {
                 Text(track.title)
                     .font(.headline)
-                    .foregroundStyle(isCurrentTrack ? .yellow : (isPlayable ? .primary : .secondary))
+                    .foregroundStyle(isCurrentTrack ? Color.appAccent : (isPlayable ? .primary : .secondary))
                 if let artist = track.artist {
                     Text(artist)
                         .font(.caption)
