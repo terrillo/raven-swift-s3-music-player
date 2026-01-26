@@ -34,6 +34,30 @@ def extract_year(date_value: str | int | None) -> int | None:
     return None
 
 
+def normalize_artist_name(name: str | None) -> str | None:
+    """Normalize artist name by extracting first artist from multi-artist strings.
+
+    Splits by "/" and returns the first artist, stripped of whitespace.
+    Example: "Justin Timberlake/50 Cent" -> "Justin Timberlake"
+    """
+    if name is None:
+        return None
+    if not name:
+        return name
+    if "/" in name:
+        name = name.split("/")[0]
+    return name.strip()
+
+
+def get_artist_grouping_key(name: str) -> str:
+    """Get case-insensitive key for artist grouping.
+
+    Example: "Afrojack" and "afrojack" -> "afrojack"
+    """
+    normalized = normalize_artist_name(name)
+    return normalized.lower() if normalized else ""
+
+
 def sanitize_s3_key(name: str, fallback: str = "Unknown") -> str:
     """Sanitize a string for use as an S3 key path component.
 

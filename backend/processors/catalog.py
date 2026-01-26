@@ -11,7 +11,7 @@ from tqdm import tqdm
 
 from ..models.catalog import Album, AlbumInfo, Artist, Catalog
 from ..services.theaudiodb import TheAudioDBService
-from ..utils.identifiers import sanitize_s3_key
+from ..utils.identifiers import get_artist_grouping_key, normalize_artist_name, sanitize_s3_key
 
 if TYPE_CHECKING:
     from ..services.lastfm import LastFMService
@@ -38,23 +38,34 @@ class CatalogBuilder:
 
     def build(self, tracks: list[dict]) -> Catalog:
         """Organize tracks into a structured catalog by album_artist and album."""
-        # Group tracks by album_artist -> album (album_artist is used for organization)
+        # Group tracks by normalized artist key (case-insensitive)
         artist_albums = defaultdict(lambda: defaultdict(list))
+        artist_display_names = {}  # grouping_key -> display name (first occurrence)
 
         for track in tracks:
             # Use album_artist for grouping (fallback to artist)
             album_artist = track.get("album_artist") or track.get("artist") or "Unknown Artist"
+            # Normalize: split by "/" and take first artist
+            album_artist = normalize_artist_name(album_artist)
+            # Get case-insensitive grouping key
+            artist_key = get_artist_grouping_key(album_artist)
+
+            # Track canonical display name (first occurrence)
+            if artist_key not in artist_display_names:
+                artist_display_names[artist_key] = album_artist
+
             album = track.get("album") or "Unknown Album"
-            artist_albums[album_artist][album].append(track)
+            artist_albums[artist_key][album].append(track)
 
         # Build the catalog structure with images and metadata from TheAudioDB
         artists = []
-        artist_names = sorted(artist_albums.keys())
+        artist_keys = sorted(artist_albums.keys())
 
         logger.info("Fetching metadata from TheAudioDB and uploading to Spaces...")
 
-        for artist_name in tqdm(artist_names, desc="Fetching metadata", unit="artist"):
-            artist = self._build_artist(artist_name, artist_albums[artist_name])
+        for artist_key in tqdm(artist_keys, desc="Fetching metadata", unit="artist"):
+            display_name = artist_display_names[artist_key]
+            artist = self._build_artist(display_name, artist_albums[artist_key])
             artists.append(artist)
 
         return Catalog(

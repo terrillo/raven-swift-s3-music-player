@@ -8,7 +8,12 @@ import pytest
 # Add parent dir to path so backend is importable as a package
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from backend.utils.identifiers import extract_year, sanitize_s3_key
+from backend.utils.identifiers import (
+    extract_year,
+    get_artist_grouping_key,
+    normalize_artist_name,
+    sanitize_s3_key,
+)
 
 
 class TestExtractYear:
@@ -107,3 +112,54 @@ class TestSanitizeS3Key:
         assert sanitize_s3_key("Reds - Single") == "Reds-Single"
         assert sanitize_s3_key("Mikky Ekko") == "Mikky-Ekko"
         assert sanitize_s3_key("In A Week (Feat. Karen Cowley)") == "In-A-Week-Feat-Karen-Cowley"
+
+
+class TestNormalizeArtistName:
+    """Tests for normalize_artist_name() function."""
+
+    def test_single_artist(self):
+        """Single artist name should pass through unchanged."""
+        assert normalize_artist_name("Afrojack") == "Afrojack"
+        assert normalize_artist_name("Justin Timberlake") == "Justin Timberlake"
+
+    def test_multi_artist_slash(self):
+        """Multi-artist names with slash should extract first artist."""
+        assert normalize_artist_name("Justin Timberlake/50 Cent") == "Justin Timberlake"
+        assert normalize_artist_name("Artist1/Artist2/Artist3") == "Artist1"
+
+    def test_whitespace_handling(self):
+        """Whitespace around artists should be stripped."""
+        assert normalize_artist_name("  Afrojack  ") == "Afrojack"
+        assert normalize_artist_name(" Justin Timberlake / 50 Cent ") == "Justin Timberlake"
+
+    def test_empty_string(self):
+        """Empty string should return empty string."""
+        assert normalize_artist_name("") == ""
+
+    def test_none_input(self):
+        """None input should return None."""
+        assert normalize_artist_name(None) is None
+
+
+class TestGetArtistGroupingKey:
+    """Tests for get_artist_grouping_key() function."""
+
+    def test_lowercase_conversion(self):
+        """Artist names should be lowercased for grouping."""
+        assert get_artist_grouping_key("Afrojack") == "afrojack"
+        assert get_artist_grouping_key("AFROJACK") == "afrojack"
+        assert get_artist_grouping_key("AfRoJaCk") == "afrojack"
+
+    def test_multi_artist_normalized_and_lowercased(self):
+        """Multi-artist names should be normalized then lowercased."""
+        assert get_artist_grouping_key("Justin Timberlake/50 Cent") == "justin timberlake"
+        assert get_artist_grouping_key("JUSTIN TIMBERLAKE/50 CENT") == "justin timberlake"
+
+    def test_empty_string(self):
+        """Empty string should return empty string."""
+        assert get_artist_grouping_key("") == ""
+
+    def test_case_insensitive_grouping(self):
+        """Different casings of same artist should produce same key."""
+        assert get_artist_grouping_key("Afrojack") == get_artist_grouping_key("afrojack")
+        assert get_artist_grouping_key("The Beatles") == get_artist_grouping_key("THE BEATLES")

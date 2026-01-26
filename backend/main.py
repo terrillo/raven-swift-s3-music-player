@@ -24,7 +24,7 @@ from .services.musicbrainz import MusicBrainzService
 from .services.storage import StorageService
 from .services.theaudiodb import TheAudioDBService
 from .utils.cache import ThreadSafeCache
-from .utils.identifiers import sanitize_s3_key
+from .utils.identifiers import normalize_artist_name, sanitize_s3_key
 
 logger = logging.getLogger(__name__)
 
@@ -202,6 +202,7 @@ class MusicUploader:
 
         # Use album_artist for organization (fallback to artist)
         album_artist_name = metadata.album_artist or metadata.artist or "Unknown Artist"
+        album_artist_name = normalize_artist_name(album_artist_name)  # Normalize multi-artist names
         album_name = metadata.album or "Unknown Album"
 
         # Get corrected album name from TheAudioDB (for consistent S3 paths)
@@ -280,6 +281,7 @@ class MusicUploader:
 
         # Use album_artist for organization (fallback to artist)
         album_artist_name = metadata.album_artist or metadata.artist or "Unknown Artist"
+        album_artist_name = normalize_artist_name(album_artist_name)  # Normalize multi-artist names
         album_name = metadata.album or "Unknown Album"
 
         # Use original names for S3 key (catalog builder handles name correction and metadata)
