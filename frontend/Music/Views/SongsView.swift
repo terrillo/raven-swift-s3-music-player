@@ -99,9 +99,14 @@ struct SongRow: View {
     var playerService: PlayerService
     var cacheService: CacheService?
     var isPlayable: Bool = true
+    var showFavoriteButton: Bool = true
 
     private var isCurrentTrack: Bool {
         playerService.currentTrack?.id == track.id
+    }
+
+    private var isFavorite: Bool {
+        FavoritesStore.shared.isTrackFavorite(track.s3Key)
     }
 
     private var localArtworkURL: URL? {
@@ -151,6 +156,16 @@ struct SongRow: View {
             }
 
             Spacer()
+
+            if showFavoriteButton {
+                Button {
+                    FavoritesStore.shared.toggleTrackFavorite(track)
+                } label: {
+                    Image(systemName: isFavorite ? "heart.fill" : "heart")
+                        .foregroundStyle(isFavorite ? .red : .secondary)
+                }
+                .buttonStyle(.plain)
+            }
 
             if !isPlayable {
                 Image(systemName: "arrow.down.circle")

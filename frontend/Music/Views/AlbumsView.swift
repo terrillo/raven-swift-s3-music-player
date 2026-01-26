@@ -17,6 +17,18 @@ struct AlbumsView: View {
         GridItem(.adaptive(minimum: 160, maximum: 200), spacing: 16)
     ]
 
+    private var sortedAlbums: [Album] {
+        let favorites = FavoritesStore.shared.favoriteAlbumIds
+        return musicService.albums.sorted { a, b in
+            let aIsFavorite = favorites.contains(a.id)
+            let bIsFavorite = favorites.contains(b.id)
+            if aIsFavorite != bIsFavorite {
+                return aIsFavorite
+            }
+            return a.name < b.name
+        }
+    }
+
     var body: some View {
         NavigationStack {
             Group {
@@ -67,7 +79,7 @@ struct AlbumsView: View {
     }
 
     private var albumListView: some View {
-        List(musicService.albums) { album in
+        List(sortedAlbums) { album in
             NavigationLink {
                 AlbumDetailView(album: album, musicService: musicService, playerService: playerService, cacheService: cacheService)
             } label: {
@@ -105,6 +117,10 @@ struct AlbumsView: View {
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                     }
+
+                    Spacer()
+
+                    AlbumFavoriteButton(album: album)
                 }
                 .padding(.vertical, 4)
             }
@@ -114,7 +130,7 @@ struct AlbumsView: View {
     private var albumGridView: some View {
         ScrollView {
             LazyVGrid(columns: gridColumns, spacing: 16) {
-                ForEach(musicService.albums) { album in
+                ForEach(sortedAlbums) { album in
                     NavigationLink {
                         AlbumDetailView(album: album, musicService: musicService, playerService: playerService, cacheService: cacheService)
                     } label: {
@@ -139,6 +155,24 @@ struct AlbumsView: View {
             return "\(hours)h \(minutes)m"
         }
         return "\(minutes) min"
+    }
+}
+
+struct AlbumFavoriteButton: View {
+    let album: Album
+
+    private var isFavorite: Bool {
+        FavoritesStore.shared.isAlbumFavorite(album.id)
+    }
+
+    var body: some View {
+        Button {
+            FavoritesStore.shared.toggleAlbumFavorite(album)
+        } label: {
+            Image(systemName: isFavorite ? "heart.fill" : "heart")
+                .foregroundStyle(isFavorite ? .red : .secondary)
+        }
+        .buttonStyle(.plain)
     }
 }
 

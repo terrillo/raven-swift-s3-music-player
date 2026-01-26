@@ -107,17 +107,32 @@ struct ArtistGridCard: View {
         artist.albums.reduce(0) { $0 + $1.tracks.count }
     }
 
+    private var isFavorite: Bool {
+        FavoritesStore.shared.isArtistFavorite(artist.id)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ArtworkImage(
-                url: artist.imageUrl,
-                size: 160,
-                systemImage: "music.mic",
-                localURL: localArtworkURL,
-                cacheService: cacheService
-            )
-            .frame(maxWidth: .infinity)
-            .aspectRatio(1, contentMode: .fit)
+            ZStack(alignment: .topTrailing) {
+                ArtworkImage(
+                    url: artist.imageUrl,
+                    size: 160,
+                    systemImage: "music.mic",
+                    localURL: localArtworkURL,
+                    cacheService: cacheService
+                )
+                .frame(maxWidth: .infinity)
+                .aspectRatio(1, contentMode: .fit)
+
+                if isFavorite {
+                    Image(systemName: "heart.fill")
+                        .foregroundStyle(.red)
+                        .padding(6)
+                        .background(.ultraThinMaterial)
+                        .clipShape(Circle())
+                        .padding(6)
+                }
+            }
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(artist.name)
@@ -145,17 +160,32 @@ struct AlbumGridCard: View {
     var localArtworkURL: URL?
     var cacheService: CacheService?
 
+    private var isFavorite: Bool {
+        FavoritesStore.shared.isAlbumFavorite(album.id)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ArtworkImage(
-                url: album.imageUrl,
-                size: 160,
-                systemImage: "square.stack",
-                localURL: localArtworkURL,
-                cacheService: cacheService
-            )
-            .frame(maxWidth: .infinity)
-            .aspectRatio(1, contentMode: .fit)
+            ZStack(alignment: .topTrailing) {
+                ArtworkImage(
+                    url: album.imageUrl,
+                    size: 160,
+                    systemImage: "square.stack",
+                    localURL: localArtworkURL,
+                    cacheService: cacheService
+                )
+                .frame(maxWidth: .infinity)
+                .aspectRatio(1, contentMode: .fit)
+
+                if isFavorite {
+                    Image(systemName: "heart.fill")
+                        .foregroundStyle(.red)
+                        .padding(6)
+                        .background(.ultraThinMaterial)
+                        .clipShape(Circle())
+                        .padding(6)
+                }
+            }
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(album.name)
@@ -211,6 +241,18 @@ struct ArtistsView: View {
     private let gridColumns = [
         GridItem(.adaptive(minimum: 160, maximum: 200), spacing: 16)
     ]
+
+    private var sortedArtists: [Artist] {
+        let favorites = FavoritesStore.shared.favoriteArtistIds
+        return musicService.artists.sorted { a, b in
+            let aIsFavorite = favorites.contains(a.id)
+            let bIsFavorite = favorites.contains(b.id)
+            if aIsFavorite != bIsFavorite {
+                return aIsFavorite
+            }
+            return a.name < b.name
+        }
+    }
 
     var body: some View {
         NavigationStack(path: $navigationPath) {
@@ -279,7 +321,7 @@ struct ArtistsView: View {
     }
 
     private var artistListView: some View {
-        List(musicService.artists) { artist in
+        List(sortedArtists) { artist in
             NavigationLink {
                 ArtistDetailView(artist: artist, musicService: musicService, playerService: playerService, cacheService: cacheService)
             } label: {
@@ -301,6 +343,10 @@ struct ArtistsView: View {
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
+
+                    Spacer()
+
+                    ArtistFavoriteButton(artist: artist)
                 }
                 .padding(.vertical, 4)
             }
@@ -310,7 +356,7 @@ struct ArtistsView: View {
     private var artistGridView: some View {
         ScrollView {
             LazyVGrid(columns: gridColumns, spacing: 16) {
-                ForEach(musicService.artists) { artist in
+                ForEach(sortedArtists) { artist in
                     NavigationLink {
                         ArtistDetailView(artist: artist, musicService: musicService, playerService: playerService, cacheService: cacheService)
                     } label: {
@@ -429,6 +475,11 @@ struct ArtistDetailView: View {
             }
         }
         .navigationTitle(artist.name)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                ArtistFavoriteButton(artist: artist)
+            }
+        }
     }
 }
 
@@ -588,6 +639,11 @@ struct AlbumDetailView: View {
             }
         }
         .navigationTitle(album.name)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                AlbumFavoriteButton(album: album)
+            }
+        }
     }
 }
 
@@ -598,6 +654,10 @@ struct AlbumTrackRow: View {
 
     private var isCurrentTrack: Bool {
         playerService.currentTrack?.id == track.id
+    }
+
+    private var isFavorite: Bool {
+        FavoritesStore.shared.isTrackFavorite(track.s3Key)
     }
 
     var body: some View {
@@ -629,6 +689,14 @@ struct AlbumTrackRow: View {
 
             Spacer()
 
+            Button {
+                FavoritesStore.shared.toggleTrackFavorite(track)
+            } label: {
+                Image(systemName: isFavorite ? "heart.fill" : "heart")
+                    .foregroundStyle(isFavorite ? .red : .secondary)
+            }
+            .buttonStyle(.plain)
+
             if !isPlayable {
                 Image(systemName: "arrow.down.circle")
                     .foregroundStyle(.secondary)
@@ -640,6 +708,24 @@ struct AlbumTrackRow: View {
                 .foregroundStyle(.secondary)
         }
         .opacity(isPlayable ? 1.0 : 0.5)
+    }
+}
+
+struct ArtistFavoriteButton: View {
+    let artist: Artist
+
+    private var isFavorite: Bool {
+        FavoritesStore.shared.isArtistFavorite(artist.id)
+    }
+
+    var body: some View {
+        Button {
+            FavoritesStore.shared.toggleArtistFavorite(artist)
+        } label: {
+            Image(systemName: isFavorite ? "heart.fill" : "heart")
+                .foregroundStyle(isFavorite ? .red : .secondary)
+        }
+        .buttonStyle(.plain)
     }
 }
 
