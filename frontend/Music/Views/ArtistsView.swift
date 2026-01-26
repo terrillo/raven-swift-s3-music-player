@@ -486,7 +486,7 @@ struct AlbumDetailView: View {
                     }
 
                     // Genre/Style/Mood/Theme metadata pills
-                    if album.genre != nil || album.mood != nil || album.theme != nil {
+                    if album.genre != nil || album.style != nil || album.mood != nil || album.theme != nil {
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(spacing: 8) {
                                 if let genre = album.genre {
