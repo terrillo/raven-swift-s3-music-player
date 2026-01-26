@@ -377,6 +377,10 @@ struct Top100Row: View {
         playerService.currentTrack?.id == track.id
     }
 
+    private var isFavorite: Bool {
+        FavoritesStore.shared.isTrackFavorite(track.s3Key)
+    }
+
     var body: some View {
         HStack {
             // Rank number
@@ -419,6 +423,14 @@ struct Top100Row: View {
             }
 
             Spacer()
+
+            Button {
+                FavoritesStore.shared.toggleTrackFavorite(track)
+            } label: {
+                Image(systemName: isFavorite ? "heart.fill" : "heart")
+                    .foregroundStyle(isFavorite ? .red : .secondary)
+            }
+            .buttonStyle(.plain)
 
             if !isPlayable {
                 Image(systemName: "arrow.down.circle")
