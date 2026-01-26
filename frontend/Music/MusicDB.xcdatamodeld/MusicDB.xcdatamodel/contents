@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<model type="com.apple.IDECoreDataModeler.DataModel" documentVersion="1.0" lastSavedToolsVersion="23231" systemVersion="24D5034f" minimumToolsVersion="Automatic" sourceLanguage="Swift" usedWithCloudKit="YES" userDefinedModelVersionIdentifier="">
+    <entity name="PlayEventEntity" representedClassName="PlayEventEntity" syncable="YES" codeGenerationType="class">
+        <attribute name="artistName" optional="YES" attributeType="String"/>
+        <attribute name="duration" optional="YES" attributeType="Double" defaultValueString="0.0" usesScalarValueType="YES"/>
+        <attribute name="playedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="trackS3Key" optional="YES" attributeType="String"/>
+        <attribute name="trackTitle" optional="YES" attributeType="String"/>
+    </entity>
+    <entity name="SkipEventEntity" representedClassName="SkipEventEntity" syncable="YES" codeGenerationType="class">
+        <attribute name="artistName" optional="YES" attributeType="String"/>
+        <attribute name="playedDuration" optional="YES" attributeType="Double" defaultValueString="0.0" usesScalarValueType="YES"/>
+        <attribute name="skippedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="trackS3Key" optional="YES" attributeType="String"/>
+        <attribute name="trackTitle" optional="YES" attributeType="String"/>
+    </entity>
+</model>
