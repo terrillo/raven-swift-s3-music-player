@@ -11,22 +11,83 @@ A full-stack music streaming app with an offline-first SwiftUI frontend and Pyth
 
 ## Features
 
-### Backend
-- Upload music to S3-compatible storage (DigitalOcean Spaces, AWS S3, MinIO, etc.)
-- Metadata enrichment from TheAudioDB, MusicBrainz, and Last.fm
-- FLAC/WAV/AAC to M4A conversion via ffmpeg
-- Parallel processing with configurable workers
-- Embedded artwork extraction
-- Dry-run mode for testing
+A complete music streaming solution that puts you in control: host your own library on S3-compatible storage, enrich it with metadata from multiple sources, and enjoy seamless offline playback across all your Apple devices.
 
-### Frontend
-- Offline-first playback (tracks cached locally)
+### Frontend (iOS/macOS/visionOS App)
+
+#### Playback
+- Play, pause, skip forward/backward with smooth transitions
+- Shuffle mode for randomized playback
+- Repeat modes: off, repeat all, repeat one
+- Queue management with up next display
+- Seekable progress bar with time display
+- Background audio playback continues when app is minimized
 - System Now Playing integration (lock screen, Control Center, headphone controls)
-- Grid/List view modes with persistence
-- Cascading artwork caching (artist, album, track)
-- Statistics and listening history
-- Background audio playback
-- Catalog caching for offline browsing
+
+#### Browsing & Discovery
+- **Artists View**: Browse all artists with grid or list layout toggle
+- **Albums View**: Browse all albums with grid or list layout toggle
+- **Songs View**: Full track listing with cache status indicators
+- **Genres View**: Browse by genre with drill-down to matching tracks
+- **Auto-Playlists**: Top 100 tracks by play count
+- Artist detail pages with bio, albums, and track listings
+- Album detail pages with artwork, track listing, and metadata
+
+#### Offline & Caching
+- Download entire library for fully offline playback
+- Per-track download progress with cancel option
+- Cascading artwork caching (automatically downloads artist and album images)
+- Cache size display and one-tap clear option
+- Offline mode banner shows last catalog update time
+- Cached tracks indicated with visual status icons
+- Non-cached tracks appear dimmed and disabled
+
+#### Search
+- Global search across artists, albums, and songs
+- Real-time results as you type
+
+#### Statistics & Analytics
+- Play count tracking per track
+- CloudKit sync for statistics across devices
+- Listening time and unique tracks played
+- Top Artists chart with play counts
+- Top Genres chart with listening breakdown
+- Time period filters: week, month, all time
+
+#### Now Playing Experience
+- **Full-screen sheet**: Large artwork, playback controls, progress slider
+- **iOS tab bar accessory**: Compact mini-player (iOS 18+)
+- **macOS/iPadOS sidebar**: Persistent player card in navigation sidebar
+
+#### Platform-Specific
+- **iOS**: Tab-based navigation, iOS 18 tab bar accessories
+- **macOS**: NavigationSplitView with three-column layout, sidebar player
+- **visionOS**: Spatial computing support
+- View mode preferences (grid/list) persist via `@AppStorage`
+
+### Backend (Python Upload & Metadata)
+
+#### Audio Format Support
+- Supported formats: MP3, M4A, FLAC, WAV, AAC
+- Automatic conversion to M4A (256kbps AAC) via ffmpeg
+- Lossless FLAC files converted while preserving quality
+- Embedded artwork extraction from audio file tags
+
+#### Metadata Enrichment
+- **TheAudioDB**: Artist bios, images, genres, styles, moods
+- **MusicBrainz**: Accurate artist/album identification via MBIDs
+- **Last.fm**: Fallback for album artwork and wiki when TheAudioDB lacks data
+- Album name correction to canonical names (e.g., "Hozier-DeLuxe-Version" → "Hozier")
+- Rich metadata fields: genre, style, mood, theme at artist, album, and track levels
+
+#### Upload & Catalog Generation
+- Parallel uploads with configurable worker count
+- Retry logic with exponential backoff for reliability
+- UUID-based filenames for artwork (prevents conflicts)
+- Hierarchical JSON catalog with streaming URLs
+- S3-compatible storage (DigitalOcean Spaces, AWS S3, MinIO, Cloudflare R2)
+- Dry-run mode for testing without uploading
+- Verbose output for debugging
 
 ## Prerequisites
 
