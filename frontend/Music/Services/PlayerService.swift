@@ -37,6 +37,10 @@ class PlayerService {
     private var recentAlbums: [String] = []
     private let recencyWindowSize = 5
 
+    // Ordered play history for the session (most recent at end)
+    private(set) var playHistory: [Track] = []
+    private var playHistoryIndex: Int = -1  // Current position in history (-1 = at end)
+
     // Streaming mode
     var streamingEnabled: Bool {
         get { UserDefaults.standard.bool(forKey: "streamingModeEnabled") }
@@ -306,6 +310,22 @@ class PlayerService {
             recordSkipEvent()
         }
 
+        // If we're navigating back through history, go forward first
+        if playHistoryIndex >= 0 && playHistoryIndex < playHistory.count - 1 {
+            playHistoryIndex += 1
+            let nextTrack = playHistory[playHistoryIndex]
+
+            // Update queue index if track is in current queue
+            if let queueIndex = queue.firstIndex(where: { $0.id == nextTrack.id }) {
+                currentIndex = queueIndex
+            }
+
+            currentTrack = nextTrack
+            updateSessionTracking(for: nextTrack, fromHistoryNavigation: true)
+            setupPlayer()
+            return
+        }
+
         if isShuffled {
             // Use weighted shuffle selection with context
             let context = buildShuffleContext()
@@ -354,7 +374,23 @@ class PlayerService {
             recordSkipEvent()
         }
 
-        // Find previous playable track
+        // Try to go back in play history first
+        if playHistoryIndex > 0 {
+            playHistoryIndex -= 1
+            let previousTrack = playHistory[playHistoryIndex]
+
+            // Update queue index if track is in current queue
+            if let queueIndex = queue.firstIndex(where: { $0.id == previousTrack.id }) {
+                currentIndex = queueIndex
+            }
+
+            currentTrack = previousTrack
+            updateSessionTracking(for: previousTrack, fromHistoryNavigation: true)
+            setupPlayer()
+            return
+        }
+
+        // Fall back to sequential navigation if no history
         var prevIndex = currentIndex > 0 ? currentIndex - 1 : queue.count - 1
         var attempts = 0
         while !isTrackPlayable(queue[prevIndex]) && attempts < queue.count {
@@ -365,6 +401,7 @@ class PlayerService {
         currentIndex = prevIndex
 
         currentTrack = queue[currentIndex]
+        updateSessionTracking(for: currentTrack!)
         setupPlayer()
     }
 
@@ -529,9 +566,19 @@ class PlayerService {
 
     // MARK: - Session Tracking for Smart Shuffle
 
-    private func updateSessionTracking(for track: Track) {
+    private func updateSessionTracking(for track: Track, fromHistoryNavigation: Bool = false) {
         // Add to session played set
         sessionPlayedKeys.insert(track.s3Key)
+
+        // Update play history (ordered list of played tracks)
+        if !fromHistoryNavigation {
+            // If we're not at the end of history, truncate forward history
+            if playHistoryIndex >= 0 && playHistoryIndex < playHistory.count - 1 {
+                playHistory = Array(playHistory.prefix(playHistoryIndex + 1))
+            }
+            playHistory.append(track)
+            playHistoryIndex = playHistory.count - 1
+        }
 
         // Update recent artists (maintain window size)
         if let artist = track.artist {
@@ -578,6 +625,8 @@ class PlayerService {
         sessionPlayedKeys.removeAll()
         recentArtists.removeAll()
         recentAlbums.removeAll()
+        playHistory.removeAll()
+        playHistoryIndex = -1
     }
 
     // MARK: - Pre-Caching
