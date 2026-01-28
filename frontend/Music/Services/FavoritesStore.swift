@@ -143,21 +143,21 @@ class FavoritesStore {
 
     func fetchFavoriteArtists() -> [FavoriteArtistEntity] {
         let request = NSFetchRequest<FavoriteArtistEntity>(entityName: "FavoriteArtistEntity")
-        request.sortDescriptors = [NSSortDescriptor(keyPath: \FavoriteArtistEntity.favoritedAt, ascending: false)]
+        request.sortDescriptors = [NSSortDescriptor(keyPath: \FavoriteArtistEntity.artistName, ascending: true)]
 
         return (try? viewContext.fetch(request)) ?? []
     }
 
     func fetchFavoriteTracks() -> [FavoriteTrackEntity] {
         let request = NSFetchRequest<FavoriteTrackEntity>(entityName: "FavoriteTrackEntity")
-        request.sortDescriptors = [NSSortDescriptor(keyPath: \FavoriteTrackEntity.favoritedAt, ascending: false)]
+        request.sortDescriptors = [NSSortDescriptor(keyPath: \FavoriteTrackEntity.trackTitle, ascending: true)]
 
         return (try? viewContext.fetch(request)) ?? []
     }
 
     func fetchFavoriteAlbums() -> [FavoriteAlbumEntity] {
         let request = NSFetchRequest<FavoriteAlbumEntity>(entityName: "FavoriteAlbumEntity")
-        request.sortDescriptors = [NSSortDescriptor(keyPath: \FavoriteAlbumEntity.favoritedAt, ascending: false)]
+        request.sortDescriptors = [NSSortDescriptor(keyPath: \FavoriteAlbumEntity.albumName, ascending: true)]
 
         return (try? viewContext.fetch(request)) ?? []
     }
