@@ -19,6 +19,7 @@
     </entity>
     <entity name="PlayEventEntity" representedClassName="PlayEventEntity" syncable="YES" codeGenerationType="class">
         <attribute name="artistName" optional="YES" attributeType="String"/>
+        <attribute name="completionRate" optional="YES" attributeType="Double" defaultValueString="0.0" usesScalarValueType="YES"/>
         <attribute name="duration" optional="YES" attributeType="Double" defaultValueString="0.0" usesScalarValueType="YES"/>
         <attribute name="playedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="trackS3Key" optional="YES" attributeType="String"/>

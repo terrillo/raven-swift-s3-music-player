@@ -29,6 +29,13 @@ class PlayerService {
     var repeatMode: RepeatMode = .off
 
     var cacheService: CacheService?
+    private let shuffleService = ShuffleService()
+
+    // Session tracking for smart shuffle
+    private var sessionPlayedKeys: Set<String> = []
+    private var recentArtists: [String] = []
+    private var recentAlbums: [String] = []
+    private let recencyWindowSize = 5
 
     // Streaming mode
     var streamingEnabled: Bool {
@@ -126,7 +133,39 @@ class PlayerService {
             currentIndex = 0
         }
 
+        // Track session play
+        updateSessionTracking(for: track)
+
         setupPlayer()
+    }
+
+    /// Start playback in shuffle mode with a weighted random starting track
+    func shufflePlay(queue: [Track], album: Album? = nil) {
+        guard !queue.isEmpty else { return }
+
+        self.queue = queue
+        self.currentAlbum = album
+
+        // Enable shuffle mode
+        if !isShuffled {
+            isShuffled = true
+        }
+
+        // Use weighted shuffle to select starting track with context
+        let context = buildShuffleContext()
+        if let startTrack = shuffleService.selectNextTrack(
+            from: queue,
+            excluding: nil,
+            context: context,
+            playableFilter: { [weak self] track in
+                self?.isTrackPlayable(track) ?? false
+            }
+        ) {
+            currentTrack = startTrack
+            currentIndex = queue.firstIndex(where: { $0.id == startTrack.id }) ?? 0
+            updateSessionTracking(for: startTrack)
+            setupPlayer()
+        }
     }
 
     private func setupPlayer() {
@@ -268,10 +307,22 @@ class PlayerService {
         }
 
         if isShuffled {
-            // Find next playable track randomly
-            let playableIndices = queue.indices.filter { isTrackPlayable(queue[$0]) && $0 != currentIndex }
-            guard let nextIndex = playableIndices.randomElement() else { return }
-            currentIndex = nextIndex
+            // Use weighted shuffle selection with context
+            let context = buildShuffleContext()
+            if let nextTrack = shuffleService.selectNextTrack(
+                from: queue,
+                excluding: currentTrack,
+                context: context,
+                playableFilter: { [weak self] track in
+                    self?.isTrackPlayable(track) ?? false
+                }
+            ) {
+                if let index = queue.firstIndex(where: { $0.id == nextTrack.id }) {
+                    currentIndex = index
+                }
+            } else {
+                return // No playable tracks
+            }
         } else {
             // Find next playable track sequentially
             var nextIndex = (currentIndex + 1) % queue.count
@@ -285,6 +336,7 @@ class PlayerService {
         }
 
         currentTrack = queue[currentIndex]
+        updateSessionTracking(for: currentTrack!)
         setupPlayer()
     }
 
@@ -467,12 +519,65 @@ class PlayerService {
 
     private func recordPlayEvent() {
         guard let track = currentTrack else { return }
-        AnalyticsStore.shared.recordPlay(track: track, duration: currentTime)
+        AnalyticsStore.shared.recordPlay(track: track, duration: currentTime, trackDuration: duration)
     }
 
     private func recordSkipEvent() {
         guard let track = currentTrack else { return }
         AnalyticsStore.shared.recordSkip(track: track, playedDuration: currentTime)
+    }
+
+    // MARK: - Session Tracking for Smart Shuffle
+
+    private func updateSessionTracking(for track: Track) {
+        // Add to session played set
+        sessionPlayedKeys.insert(track.s3Key)
+
+        // Update recent artists (maintain window size)
+        if let artist = track.artist {
+            // Remove if already present to avoid duplicates
+            recentArtists.removeAll { $0 == artist }
+            // Insert at beginning (most recent)
+            recentArtists.insert(artist, at: 0)
+            // Trim to window size
+            if recentArtists.count > recencyWindowSize {
+                recentArtists = Array(recentArtists.prefix(recencyWindowSize))
+            }
+        }
+
+        // Update recent albums (maintain window size)
+        if let album = track.album {
+            // Remove if already present to avoid duplicates
+            recentAlbums.removeAll { $0 == album }
+            // Insert at beginning (most recent)
+            recentAlbums.insert(album, at: 0)
+            // Trim to window size
+            if recentAlbums.count > recencyWindowSize {
+                recentAlbums = Array(recentAlbums.prefix(recencyWindowSize))
+            }
+        }
+    }
+
+    private func buildShuffleContext() -> ShuffleContext {
+        var context = ShuffleContext()
+        context.recentArtists = recentArtists
+        context.recentAlbums = recentAlbums
+        context.sessionPlayed = sessionPlayedKeys
+
+        // Get genre/mood from current track for continuity
+        if let track = currentTrack {
+            context.lastPlayedGenre = Genre.normalize(track.genre)
+            context.lastPlayedMood = track.mood
+        }
+
+        return context
+    }
+
+    /// Reset session tracking (call when queue changes or app restarts)
+    func resetSessionTracking() {
+        sessionPlayedKeys.removeAll()
+        recentArtists.removeAll()
+        recentAlbums.removeAll()
     }
 
     // MARK: - Pre-Caching

@@ -111,12 +111,7 @@ struct GenreDetailView: View {
         List {
             // Shuffle button
             Button {
-                if let track = firstPlayableTrack {
-                    if !playerService.isShuffled {
-                        playerService.toggleShuffle()
-                    }
-                    playerService.play(track: track, queue: songsInGenre)
-                }
+                playerService.shufflePlay(queue: songsInGenre)
             } label: {
                 Label("Shuffle", systemImage: "shuffle")
                     .frame(maxWidth: .infinity)
