@@ -50,12 +50,7 @@ struct SongsView: View {
                 LazyVStack(spacing: 0) {
                     // Shuffle button
                     Button {
-                        if let track = firstPlayableTrack {
-                            if !playerService.isShuffled {
-                                playerService.toggleShuffle()
-                            }
-                            playerService.play(track: track, queue: musicService.songs)
-                        }
+                        playerService.shufflePlay(queue: musicService.songs)
                     } label: {
                         Label("Shuffle", systemImage: "shuffle")
                             .frame(maxWidth: .infinity)

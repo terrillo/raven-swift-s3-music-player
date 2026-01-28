@@ -598,12 +598,7 @@ struct AlbumDetailView: View {
                 .disabled(!hasPlayableTracks)
 
                 Button {
-                    if let track = firstPlayableTrack {
-                        if !playerService.isShuffled {
-                            playerService.toggleShuffle()
-                        }
-                        playerService.play(track: track, album: album)
-                    }
+                    playerService.shufflePlay(queue: album.tracks, album: album)
                 } label: {
                     Label("Shuffle", systemImage: "shuffle")
                         .frame(maxWidth: .infinity)

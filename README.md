@@ -17,12 +17,23 @@ A complete music streaming solution that puts you in control: host your own libr
 
 #### Playback
 - Play, pause, skip forward/backward with smooth transitions
-- Shuffle mode for randomized playback
 - Repeat modes: off, repeat all, repeat one
 - Queue management with up next display
 - Seekable progress bar with time display
 - Background audio playback continues when app is minimized
 - System Now Playing integration (lock screen, Control Center, headphone controls)
+
+#### Smart Shuffle
+Intelligent shuffle that learns your listening habits:
+- **Artist diversity**: Avoids same artist back-to-back (spreads across last 5 tracks)
+- **Album spread**: Prevents clustering of tracks from the same album
+- **Session memory**: Won't repeat tracks you've already heard this session
+- **Rediscovery**: Boosts tracks you haven't played in 30+ days
+- **Genre continuity**: Prefers similar genres for smooth transitions
+- **Mood matching**: Favors tracks with matching mood
+- **Skip learning**: Reduces weight for frequently skipped tracks
+- **Completion tracking**: Penalizes tracks you often don't finish
+- **Time-of-day patterns**: Learns what you listen to at different times (morning/afternoon/evening/night)
 
 #### Browsing & Discovery
 - **Artists View**: Browse all artists with grid or list layout toggle
@@ -235,6 +246,8 @@ raven-swift-s3-music-player/
 │       │   ├── MusicService.swift    # Catalog fetching
 │       │   ├── PlayerService.swift   # Audio playback
 │       │   ├── CacheService.swift    # Offline caching
+│       │   ├── ShuffleService.swift  # Smart shuffle with weighted selection
+│       │   ├── AnalyticsStore.swift  # Play/skip tracking with CloudKit
 │       │   └── StatisticsService.swift
 │       └── Views/
 │           ├── ContentView.swift

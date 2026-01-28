@@ -76,8 +76,10 @@ python -m pytest tests/ -v --cov=backend
 
 **Services/**
 - `MusicService.swift` - Fetches catalog JSON from CDN (with cache-busting timestamp), provides artists/albums/songs arrays, supports offline catalog caching
-- `PlayerService.swift` - Audio playback with AVPlayer, system Now Playing integration, queue management
+- `PlayerService.swift` - Audio playback with AVPlayer, system Now Playing integration, queue management, session tracking for smart shuffle
 - `CacheService.swift` - Downloads and caches music/artwork for offline playback using SwiftData, cascading artwork caching for artists/albums
+- `ShuffleService.swift` - Weighted random track selection with 9 intelligence factors for smart shuffle
+- `AnalyticsStore.swift` - Core Data + CloudKit analytics with play counts, skip tracking, completion rates, and time-of-day preferences
 
 **Views/**
 - `ContentView.swift` - Main view with TabView (iOS) or NavigationSplitView (macOS), offline mode banner
@@ -106,6 +108,25 @@ python -m pytest tests/ -v --cov=backend
 - Non-cached tracks appear dimmed (50% opacity) and are disabled
 - System Now Playing integration: lock screen, Control Center, headphone controls
 - Background audio playback supported
+
+**Smart Shuffle:**
+The shuffle system uses weighted random selection with 9 intelligence factors:
+
+1. **Base weight by play count** - Unplayed tracks weighted higher (10.0) than frequently played (3.0)
+2. **Skip penalty** - Exponential decay (0.3^n) for skipped tracks, extra penalty for recent skips
+3. **Artist diversity** - Penalizes same artist in last 5 tracks to avoid clustering
+4. **Album spread** - Penalizes tracks from recently played albums
+5. **Session memory** - Strongly penalizes (90%) tracks already played this session
+6. **Rediscovery boost** - 50% boost for tracks not played in 30+ days
+7. **Genre continuity** - 50% boost for matching genre with current track
+8. **Mood continuity** - 30% boost for matching mood with current track
+9. **Time-of-day preferences** - Up to 20% boost for tracks frequently played at current time period (morning/afternoon/evening/night)
+
+Key files:
+- `ShuffleService.swift` - Weight calculation with `ShuffleContext` struct
+- `PlayerService.swift` - Session tracking (`sessionPlayedKeys`, `recentArtists`, `recentAlbums`)
+- `AnalyticsStore.swift` - Query methods: `fetchLastPlayDates()`, `fetchCompletionRates()`, `fetchTimeOfDayPreferences()`
+- `MusicDB.xcdatamodeld` - `PlayEventEntity` includes `completionRate` attribute
 
 ### Backend (`backend/`)
 

@@ -60,13 +60,20 @@ class AnalyticsStore {
 
     // MARK: - Record Events
 
-    func recordPlay(track: Track, duration: TimeInterval) {
+    func recordPlay(track: Track, duration: TimeInterval, trackDuration: TimeInterval? = nil) {
         let event = PlayEventEntity(context: viewContext)
         event.trackS3Key = track.s3Key
         event.trackTitle = track.title
         event.artistName = track.artist
         event.playedAt = Date()
         event.duration = duration
+
+        // Calculate completion rate if track duration is provided
+        if let totalDuration = trackDuration, totalDuration > 0 {
+            event.completionRate = min(duration / totalDuration, 1.0)
+        } else {
+            event.completionRate = 1.0  // Default to 100% if unknown
+        }
 
         do {
             try viewContext.save()
@@ -165,6 +172,129 @@ class AnalyticsStore {
         return countsByDay
             .sorted { $0.key < $1.key }
             .map { ($0.key, $0.value) }
+    }
+
+    // MARK: - Shuffle Statistics
+
+    /// Returns play counts for a set of track keys (all-time)
+    func fetchPlayCounts(for trackKeys: Set<String>) -> [String: Int] {
+        let request = NSFetchRequest<PlayEventEntity>(entityName: "PlayEventEntity")
+        guard let events = try? viewContext.fetch(request) else { return [:] }
+
+        var counts: [String: Int] = [:]
+        for event in events {
+            guard let key = event.trackS3Key, trackKeys.contains(key) else { continue }
+            counts[key, default: 0] += 1
+        }
+        return counts
+    }
+
+    /// Returns recent skip data (last 7 days) for track keys
+    func fetchRecentSkips(for trackKeys: Set<String>, withinDays: Int = 7) -> [String: (count: Int, mostRecent: Date?)] {
+        let request = NSFetchRequest<SkipEventEntity>(entityName: "SkipEventEntity")
+        let cutoffDate = Calendar.current.date(byAdding: .day, value: -withinDays, to: Date()) ?? Date()
+        request.predicate = NSPredicate(format: "skippedAt >= %@", cutoffDate as NSDate)
+
+        guard let events = try? viewContext.fetch(request) else { return [:] }
+
+        var skips: [String: (count: Int, mostRecent: Date?)] = [:]
+        for event in events {
+            guard let key = event.trackS3Key, trackKeys.contains(key) else { continue }
+            let existing = skips[key] ?? (0, nil)
+            let mostRecent: Date? = {
+                guard let eventDate = event.skippedAt else { return existing.mostRecent }
+                guard let existingDate = existing.mostRecent else { return eventDate }
+                return eventDate > existingDate ? eventDate : existingDate
+            }()
+            skips[key] = (existing.count + 1, mostRecent)
+        }
+        return skips
+    }
+
+    // MARK: - Smart Shuffle Statistics
+
+    /// Returns most recent play date for each track
+    func fetchLastPlayDates(for trackKeys: Set<String>) -> [String: Date] {
+        let request = NSFetchRequest<PlayEventEntity>(entityName: "PlayEventEntity")
+        guard let events = try? viewContext.fetch(request) else { return [:] }
+
+        var lastPlayed: [String: Date] = [:]
+        for event in events {
+            guard let key = event.trackS3Key,
+                  let date = event.playedAt,
+                  trackKeys.contains(key) else { continue }
+            if lastPlayed[key] == nil || date > lastPlayed[key]! {
+                lastPlayed[key] = date
+            }
+        }
+        return lastPlayed
+    }
+
+    /// Returns average completion rate for tracks (0.0 to 1.0)
+    func fetchCompletionRates(for trackKeys: Set<String>) -> [String: Double] {
+        let request = NSFetchRequest<PlayEventEntity>(entityName: "PlayEventEntity")
+        guard let events = try? viewContext.fetch(request) else { return [:] }
+
+        var totals: [String: (sum: Double, count: Int)] = [:]
+        for event in events {
+            guard let key = event.trackS3Key, trackKeys.contains(key) else { continue }
+            let existing = totals[key] ?? (0.0, 0)
+            totals[key] = (existing.sum + event.completionRate, existing.count + 1)
+        }
+
+        var averages: [String: Double] = [:]
+        for (key, data) in totals {
+            averages[key] = data.count > 0 ? data.sum / Double(data.count) : 1.0
+        }
+        return averages
+    }
+
+    /// Returns tracks most played during current time period (morning/afternoon/evening/night)
+    func fetchTimeOfDayPreferences(for trackKeys: Set<String>) -> [String: Double] {
+        let hour = Calendar.current.component(.hour, from: Date())
+        let periodRange: (start: Int, end: Int) = {
+            switch hour {
+            case 5..<12: return (5, 12)      // Morning
+            case 12..<17: return (12, 17)    // Afternoon
+            case 17..<21: return (17, 21)    // Evening
+            default: return (21, 5)          // Night (wraps)
+            }
+        }()
+
+        let request = NSFetchRequest<PlayEventEntity>(entityName: "PlayEventEntity")
+        guard let events = try? viewContext.fetch(request) else { return [:] }
+
+        var counts: [String: Int] = [:]
+        let calendar = Calendar.current
+
+        for event in events {
+            guard let key = event.trackS3Key,
+                  let playedAt = event.playedAt,
+                  trackKeys.contains(key) else { continue }
+
+            let eventHour = calendar.component(.hour, from: playedAt)
+
+            // Check if event hour falls within the period
+            let inPeriod: Bool
+            if periodRange.start < periodRange.end {
+                // Normal range (e.g., 5..<12)
+                inPeriod = eventHour >= periodRange.start && eventHour < periodRange.end
+            } else {
+                // Wrapping range (e.g., 21..<5 means 21-23 or 0-4)
+                inPeriod = eventHour >= periodRange.start || eventHour < periodRange.end
+            }
+
+            if inPeriod {
+                counts[key, default: 0] += 1
+            }
+        }
+
+        // Normalize to scores (higher count = higher score)
+        var scores: [String: Double] = [:]
+        for (key, count) in counts {
+            scores[key] = Double(count)
+        }
+        return scores
     }
 
     // MARK: - Clear All Data
