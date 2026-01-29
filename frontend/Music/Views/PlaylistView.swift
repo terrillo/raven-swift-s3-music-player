@@ -115,7 +115,8 @@ struct FavoriteArtistsView: View {
                                 size: 56,
                                 systemImage: "music.mic",
                                 localURL: cacheService?.localArtworkURL(for: artist.imageUrl ?? ""),
-                                cacheService: cacheService
+                                cacheService: cacheService,
+                                isCircular: true
                             )
 
                             VStack(alignment: .leading, spacing: 4) {

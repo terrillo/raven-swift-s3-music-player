@@ -11,9 +11,14 @@ struct ArtworkImage: View {
     let systemImage: String
     var localURL: URL? = nil
     var cacheService: CacheService? = nil
+    var isCircular: Bool = false
 
     @State private var cachedLocalURL: URL? = nil
     @State private var hasTriggeredDownload = false
+
+    private var clipShape: AnyShape {
+        isCircular ? AnyShape(Circle()) : AnyShape(RoundedRectangle(cornerRadius: 8))
+    }
 
     var body: some View {
         Group {
@@ -23,13 +28,13 @@ struct ArtworkImage: View {
                     .resizable()
                     .aspectRatio(contentMode: .fill)
                     .frame(width: size, height: size)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .clipShape(clipShape)
                 #else
                 Image(nsImage: platformImage)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
                     .frame(width: size, height: size)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .clipShape(clipShape)
                 #endif
             } else if let urlString = url, let imageUrl = URL(string: urlString) {
                 if let cacheService = cacheService {
@@ -50,7 +55,7 @@ struct ArtworkImage: View {
                                 .resizable()
                                 .aspectRatio(contentMode: .fill)
                                 .frame(width: size, height: size)
-                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                                .clipShape(clipShape)
                         case .failure:
                             placeholderView
                         @unknown default:
@@ -82,7 +87,7 @@ struct ArtworkImage: View {
             .foregroundStyle(.secondary)
             .frame(width: size, height: size)
             .background(Color.secondary.opacity(0.1))
-            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .clipShape(clipShape)
             .shadow(radius: 20)
     }
 
@@ -120,7 +125,8 @@ struct ArtistGridCard: View {
                     size: 160,
                     systemImage: "music.mic",
                     localURL: localArtworkURL,
-                    cacheService: cacheService
+                    cacheService: cacheService,
+                    isCircular: true
                 )
                 .frame(maxWidth: .infinity)
                 .aspectRatio(1, contentMode: .fit)
@@ -332,7 +338,8 @@ struct ArtistsView: View {
                         size: 56,
                         systemImage: "music.mic",
                         localURL: cacheService?.localArtworkURL(for: artist.imageUrl ?? ""),
-                        cacheService: cacheService
+                        cacheService: cacheService,
+                        isCircular: true
                     )
 
                     VStack(alignment: .leading, spacing: 4) {
@@ -398,7 +405,7 @@ struct ArtistDetailView: View {
             Section {
                 VStack(spacing: 16) {
                     // Artist image
-                    ArtworkImage(url: artist.imageUrl, size: 150, systemImage: "music.mic", cacheService: cacheService)
+                    ArtworkImage(url: artist.imageUrl, size: 150, systemImage: "music.mic", cacheService: cacheService, isCircular: true)
 
                     // Disambiguation subtitle
                     if let disambiguation = artist.disambiguation, !disambiguation.isEmpty {
@@ -873,7 +880,7 @@ extension Artist {
 
 #Preview("Artwork Image") {
     VStack(spacing: 20) {
-        ArtworkImage(url: nil, size: 100, systemImage: "music.mic")
+        ArtworkImage(url: nil, size: 100, systemImage: "music.mic", isCircular: true)
         ArtworkImage(url: nil, size: 100, systemImage: "square.stack")
         ArtworkImage(url: nil, size: 60, systemImage: "music.note")
     }
