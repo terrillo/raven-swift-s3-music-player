@@ -4,6 +4,11 @@
 //
 
 import SwiftUI
+#if os(iOS)
+import UIKit
+#else
+import AppKit
+#endif
 
 struct ArtworkImage: View {
     let url: String?
@@ -126,7 +131,7 @@ struct ArtistGridCard: View {
                     systemImage: "music.mic",
                     localURL: localArtworkURL,
                     cacheService: cacheService,
-                    isCircular: true
+                    isCircular: false
                 )
                 .frame(maxWidth: .infinity)
                 .aspectRatio(1, contentMode: .fit)
@@ -497,6 +502,8 @@ struct AlbumDetailView: View {
     var playerService: PlayerService
     var cacheService: CacheService?
 
+    @State private var artworkColor: Color = Color(white: 0.3)
+
     private var firstPlayableTrack: Track? {
         album.tracks.first { playerService.isTrackPlayable($0) }
     }
@@ -514,12 +521,67 @@ struct AlbumDetailView: View {
         return musicService.artists.first { $0.name == name }
     }
 
+    private func extractArtworkColor() {
+        // Try to load from cache service first
+        if let urlString = album.imageUrl,
+           let cacheService = cacheService,
+           let localURL = cacheService.localArtworkURL(for: urlString) {
+            extractColor(from: localURL)
+            return
+        }
+
+        // Fall back to downloading if we have a URL
+        if let urlString = album.imageUrl,
+           let url = URL(string: urlString) {
+            Task {
+                do {
+                    let (data, _) = try await URLSession.shared.data(from: url)
+                    await MainActor.run {
+                        #if os(iOS)
+                        if let image = UIImage(data: data), let color = image.averageColor {
+                            withAnimation(.easeInOut(duration: 0.5)) {
+                                artworkColor = color
+                            }
+                        }
+                        #else
+                        if let image = NSImage(data: data), let color = image.averageColor {
+                            withAnimation(.easeInOut(duration: 0.5)) {
+                                artworkColor = color
+                            }
+                        }
+                        #endif
+                    }
+                } catch {
+                    // Silently fail - keep default color
+                }
+            }
+        }
+    }
+
+    private func extractColor(from url: URL) {
+        guard let data = try? Data(contentsOf: url) else { return }
+        #if os(iOS)
+        if let image = UIImage(data: data), let color = image.averageColor {
+            withAnimation(.easeInOut(duration: 0.5)) {
+                artworkColor = color
+            }
+        }
+        #else
+        if let image = NSImage(data: data), let color = image.averageColor {
+            withAnimation(.easeInOut(duration: 0.5)) {
+                artworkColor = color
+            }
+        }
+        #endif
+    }
+
     var body: some View {
         List {
             // Album header with artwork
             Section {
                 VStack(spacing: 12) {
-                    ArtworkImage(url: album.imageUrl, size: 200, systemImage: "square.stack", cacheService: cacheService)
+                    ArtworkImage(url: album.imageUrl, size: 270, systemImage: "square.stack", cacheService: cacheService)
+                        .shadow(radius: 10)
 
                     // Artist name (tappable to go to artist view)
                     if let artist = artist {
@@ -528,20 +590,20 @@ struct AlbumDetailView: View {
                         } label: {
                             Text(artist.name)
                                 .font(.title3)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(artworkColor.contrastingSecondary)
                         }
                         .buttonStyle(.plain)
                     } else if let name = artistName {
                         Text(name)
                             .font(.title3)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(artworkColor.contrastingSecondary)
                     }
 
                     // Release date
                     if let releaseDate = album.releaseDate {
                         Text(String(releaseDate))
                             .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(artworkColor.contrastingSecondary)
                     }
 
                     // Genre/Style/Mood/Theme metadata pills
@@ -551,33 +613,37 @@ struct AlbumDetailView: View {
                                 if let genre = album.genre {
                                     Text(genre)
                                         .font(.caption)
+                                        .foregroundStyle(artworkColor.contrastingForeground)
                                         .padding(.horizontal, 10)
                                         .padding(.vertical, 4)
-                                        .background(Color.secondary.opacity(0.2))
+                                        .background(artworkColor.contrastingForeground.opacity(0.15))
                                         .clipShape(Capsule())
                                 }
                                 if let style = album.style {
                                     Text(style)
                                         .font(.caption)
+                                        .foregroundStyle(artworkColor.contrastingForeground)
                                         .padding(.horizontal, 10)
                                         .padding(.vertical, 4)
-                                        .background(Color.orange.opacity(0.2))
+                                        .background(artworkColor.contrastingForeground.opacity(0.15))
                                         .clipShape(Capsule())
                                 }
                                 if let mood = album.mood {
                                     Text(mood)
                                         .font(.caption)
+                                        .foregroundStyle(artworkColor.contrastingForeground)
                                         .padding(.horizontal, 10)
                                         .padding(.vertical, 4)
-                                        .background(Color.blue.opacity(0.2))
+                                        .background(artworkColor.contrastingForeground.opacity(0.15))
                                         .clipShape(Capsule())
                                 }
                                 if let theme = album.theme {
                                     Text(theme)
                                         .font(.caption)
+                                        .foregroundStyle(artworkColor.contrastingForeground)
                                         .padding(.horizontal, 10)
                                         .padding(.vertical, 4)
-                                        .background(Color.purple.opacity(0.2))
+                                        .background(artworkColor.contrastingForeground.opacity(0.15))
                                         .clipShape(Capsule())
                                 }
                             }
@@ -600,19 +666,24 @@ struct AlbumDetailView: View {
                 } label: {
                     Label("Play", systemImage: "play.fill")
                         .frame(maxWidth: .infinity)
+                        .padding(7)
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(.appAccent)
+                .buttonStyle(.bordered)
+                .foregroundStyle(artworkColor.contrastingForeground)
                 .disabled(!hasPlayableTracks)
+                .cornerRadius(6.0)
 
                 Button {
                     playerService.shufflePlay(queue: album.tracks, album: album)
                 } label: {
                     Label("Shuffle", systemImage: "shuffle")
                         .frame(maxWidth: .infinity)
+                        .padding(7)
                 }
+                .foregroundStyle(artworkColor.contrastingForeground)
                 .buttonStyle(.bordered)
                 .disabled(!hasPlayableTracks)
+                .cornerRadius(6.0)
             }
             .listRowBackground(Color.clear)
 
@@ -641,12 +712,18 @@ struct AlbumDetailView: View {
                 }
             }
         }
+        .scrollContentBackground(.hidden)
+        .background(artworkColor.gradient)
+        .onAppear {
+            extractArtworkColor()
+        }
         .navigationTitle(album.name)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 AlbumFavoriteButton(album: album)
             }
         }
+        .toolbarBackground(artworkColor, for: .navigationBar)
     }
 }
 
@@ -775,7 +852,7 @@ extension Track {
 extension Album {
     static let preview = Album(
         name: "Hozier",
-        imageUrl: "https://www.theaudiodb.com/images/media/album/thumb/hozier-5ff7e3e3e0f2c.jpg",
+        imageUrl: "https://upload.wikimedia.org/wikipedia/en/a/a0/Hozier_-_Hozier.png",
         wiki: "Hozier is the debut studio album by Irish singer-songwriter Hozier, released on 19 September 2014 by Island Records and Rubyworks.",
         releaseDate: 2014,
         genre: "Alternative Rock",

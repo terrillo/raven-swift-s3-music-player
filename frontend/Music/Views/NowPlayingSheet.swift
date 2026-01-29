@@ -392,9 +392,9 @@ struct NowPlayingSheet: View {
                         .frame(width: 36, height: 36)
                         .background {
                             if playerService.isShuffled {
-                                Circle()
-                                    .fill(.red)
-                                    .glassEffect(.regular)
+                                Rectangle()
+                                    .background(.ultraThinMaterial)
+                                    .cornerRadius(6.0)
                             }
                         }
                 }
@@ -412,9 +412,9 @@ struct NowPlayingSheet: View {
                         .frame(width: 36, height: 36)
                         .background {
                             if playerService.repeatMode != .off {
-                                Circle()
-                                    .fill(.red)
-                                    .glassEffect(.regular)
+                                Rectangle()
+                                    .background(.ultraThinMaterial)
+                                    .cornerRadius(6.0)
                             }
                         }
                 }
