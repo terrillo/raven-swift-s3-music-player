@@ -176,6 +176,73 @@ struct AlbumFavoriteButton: View {
     }
 }
 
-#Preview {
-    AlbumsView(showingSearch: .constant(false), musicService: MusicService(), playerService: PlayerService())
+// MARK: - Previews
+
+#Preview("Albums View") {
+    AlbumsView(
+        showingSearch: .constant(false),
+        musicService: MusicService(),
+        playerService: PlayerService()
+    )
+}
+
+#Preview("Album Favorite Button") {
+    AlbumFavoriteButton(album: .preview)
+        .padding()
+}
+
+#Preview("Album List Row") {
+    List {
+        HStack(spacing: 12) {
+            ArtworkImage(
+                url: Album.preview.imageUrl,
+                size: 64,
+                systemImage: "square.stack"
+            )
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(Album.preview.name)
+                    .font(.headline)
+
+                if let artist = Album.preview.tracks.first?.artist {
+                    Text(artist)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+
+                HStack(spacing: 4) {
+                    Text("\(Album.preview.tracks.count) songs")
+                    if let releaseDate = Album.preview.releaseDate {
+                        Text("·")
+                        Text(String(releaseDate))
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+            }
+
+            Spacer()
+
+            AlbumFavoriteButton(album: .preview)
+        }
+        .padding(.vertical, 4)
+    }
+}
+
+#Preview("Album Grid") {
+    let gridColumns = [
+        GridItem(.adaptive(minimum: 160, maximum: 200), spacing: 16)
+    ]
+
+    ScrollView {
+        LazyVGrid(columns: gridColumns, spacing: 16) {
+            ForEach(Album.previewAlbums) { album in
+                AlbumGridCard(
+                    album: album,
+                    artistName: album.tracks.first?.artist
+                )
+            }
+        }
+        .padding()
+    }
 }

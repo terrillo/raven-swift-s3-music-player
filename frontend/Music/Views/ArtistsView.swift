@@ -725,6 +725,204 @@ struct ArtistFavoriteButton: View {
     }
 }
 
-#Preview {
-    ArtistsView(showingSearch: .constant(false), musicService: MusicService(), playerService: PlayerService(), pendingNavigation: .constant(nil))
+// MARK: - Preview Sample Data
+
+extension Track {
+    static let preview = Track(
+        title: "Take Me to Church",
+        artist: "Hozier",
+        album: "Hozier",
+        trackNumber: 1,
+        duration: 242,
+        format: "m4a",
+        s3Key: "Hozier/Hozier/Take-Me-to-Church.m4a",
+        url: "https://example.com/track.m4a",
+        embeddedArtworkUrl: nil,
+        genre: "Alternative Rock",
+        style: "Indie Rock",
+        mood: "Melancholic",
+        theme: "Spirituality",
+        albumArtist: "Hozier",
+        trackTotal: 13,
+        discNumber: 1,
+        discTotal: 1,
+        year: 2014,
+        composer: nil,
+        comment: nil,
+        bitrate: 256.0,
+        samplerate: 44100,
+        channels: 2,
+        filesize: 7654321,
+        originalFormat: nil
+    )
+
+    static let previewTracks: [Track] = [
+        Track(title: "Take Me to Church", artist: "Hozier", album: "Hozier", trackNumber: 1, duration: 242, format: "m4a", s3Key: "Hozier/Hozier/01-Take-Me-to-Church.m4a", url: nil, embeddedArtworkUrl: nil, genre: "Alternative Rock", style: nil, mood: nil, theme: nil, albumArtist: nil, trackTotal: nil, discNumber: nil, discTotal: nil, year: nil, composer: nil, comment: nil, bitrate: nil, samplerate: nil, channels: nil, filesize: nil, originalFormat: nil),
+        Track(title: "Angel of Small Death", artist: "Hozier", album: "Hozier", trackNumber: 2, duration: 198, format: "m4a", s3Key: "Hozier/Hozier/02-Angel-of-Small-Death.m4a", url: nil, embeddedArtworkUrl: nil, genre: "Alternative Rock", style: nil, mood: nil, theme: nil, albumArtist: nil, trackTotal: nil, discNumber: nil, discTotal: nil, year: nil, composer: nil, comment: nil, bitrate: nil, samplerate: nil, channels: nil, filesize: nil, originalFormat: nil),
+        Track(title: "Jackie and Wilson", artist: "Hozier", album: "Hozier", trackNumber: 3, duration: 225, format: "m4a", s3Key: "Hozier/Hozier/03-Jackie-and-Wilson.m4a", url: nil, embeddedArtworkUrl: nil, genre: "Alternative Rock", style: nil, mood: nil, theme: nil, albumArtist: nil, trackTotal: nil, discNumber: nil, discTotal: nil, year: nil, composer: nil, comment: nil, bitrate: nil, samplerate: nil, channels: nil, filesize: nil, originalFormat: nil),
+        Track(title: "Someone New", artist: "Hozier", album: "Hozier", trackNumber: 4, duration: 212, format: "m4a", s3Key: "Hozier/Hozier/04-Someone-New.m4a", url: nil, embeddedArtworkUrl: nil, genre: "Alternative Rock", style: nil, mood: nil, theme: nil, albumArtist: nil, trackTotal: nil, discNumber: nil, discTotal: nil, year: nil, composer: nil, comment: nil, bitrate: nil, samplerate: nil, channels: nil, filesize: nil, originalFormat: nil),
+        Track(title: "From Eden", artist: "Hozier", album: "Hozier", trackNumber: 5, duration: 267, format: "m4a", s3Key: "Hozier/Hozier/05-From-Eden.m4a", url: nil, embeddedArtworkUrl: nil, genre: "Alternative Rock", style: nil, mood: nil, theme: nil, albumArtist: nil, trackTotal: nil, discNumber: nil, discTotal: nil, year: nil, composer: nil, comment: nil, bitrate: nil, samplerate: nil, channels: nil, filesize: nil, originalFormat: nil)
+    ]
+}
+
+extension Album {
+    static let preview = Album(
+        name: "Hozier",
+        imageUrl: "https://www.theaudiodb.com/images/media/album/thumb/hozier-5ff7e3e3e0f2c.jpg",
+        wiki: "Hozier is the debut studio album by Irish singer-songwriter Hozier, released on 19 September 2014 by Island Records and Rubyworks.",
+        releaseDate: 2014,
+        genre: "Alternative Rock",
+        style: "Indie Rock",
+        mood: "Melancholic",
+        theme: "Love",
+        tracks: Track.previewTracks,
+        releaseType: "Album",
+        country: "IE",
+        label: "Island Records",
+        barcode: nil,
+        mediaFormat: nil
+    )
+
+    static let previewAlbums: [Album] = [
+        preview,
+        Album(
+            name: "Wasteland, Baby!",
+            imageUrl: nil,
+            wiki: "Second studio album by Irish musician Hozier.",
+            releaseDate: 2019,
+            genre: "Alternative Rock",
+            style: "Indie Folk",
+            mood: "Hopeful",
+            theme: "Apocalypse",
+            tracks: [
+                Track(title: "Nina Cried Power", artist: "Hozier", album: "Wasteland, Baby!", trackNumber: 1, duration: 298, format: "m4a", s3Key: "Hozier/Wasteland-Baby/01-Nina-Cried-Power.m4a", url: nil, embeddedArtworkUrl: nil, genre: nil, style: nil, mood: nil, theme: nil, albumArtist: nil, trackTotal: nil, discNumber: nil, discTotal: nil, year: nil, composer: nil, comment: nil, bitrate: nil, samplerate: nil, channels: nil, filesize: nil, originalFormat: nil),
+                Track(title: "Almost (Sweet Music)", artist: "Hozier", album: "Wasteland, Baby!", trackNumber: 2, duration: 254, format: "m4a", s3Key: "Hozier/Wasteland-Baby/02-Almost.m4a", url: nil, embeddedArtworkUrl: nil, genre: nil, style: nil, mood: nil, theme: nil, albumArtist: nil, trackTotal: nil, discNumber: nil, discTotal: nil, year: nil, composer: nil, comment: nil, bitrate: nil, samplerate: nil, channels: nil, filesize: nil, originalFormat: nil)
+            ],
+            releaseType: "Album",
+            country: "IE",
+            label: "Columbia",
+            barcode: nil,
+            mediaFormat: nil
+        )
+    ]
+}
+
+extension Artist {
+    static let preview = Artist(
+        name: "Hozier",
+        imageUrl: "https://www.theaudiodb.com/images/media/artist/thumb/hozier.jpg",
+        bio: "Andrew John Hozier-Byrne, known mononymously as Hozier, is an Irish singer, songwriter and musician. His music primarily draws from folk, soul and blues, often using religious and literary themes.",
+        genre: "Alternative Rock",
+        style: "Indie Folk",
+        mood: "Melancholic",
+        albums: Album.previewAlbums,
+        artistType: "Person",
+        area: "Ireland",
+        beginDate: "1990-03-17",
+        endDate: nil,
+        disambiguation: "Irish singer-songwriter"
+    )
+
+    static let previewArtists: [Artist] = [
+        preview,
+        Artist(
+            name: "Adele",
+            imageUrl: nil,
+            bio: "Adele Laurie Blue Adkins is an English singer and songwriter.",
+            genre: "Pop",
+            style: "Soul",
+            mood: "Emotional",
+            albums: [
+                Album(name: "21", imageUrl: nil, wiki: nil, releaseDate: 2011, genre: "Pop", style: nil, mood: nil, theme: nil, tracks: [
+                    Track(title: "Rolling in the Deep", artist: "Adele", album: "21", trackNumber: 1, duration: 228, format: "m4a", s3Key: "Adele/21/01-Rolling-in-the-Deep.m4a", url: nil, embeddedArtworkUrl: nil, genre: nil, style: nil, mood: nil, theme: nil, albumArtist: nil, trackTotal: nil, discNumber: nil, discTotal: nil, year: nil, composer: nil, comment: nil, bitrate: nil, samplerate: nil, channels: nil, filesize: nil, originalFormat: nil)
+                ], releaseType: nil, country: nil, label: nil, barcode: nil, mediaFormat: nil)
+            ],
+            artistType: "Person",
+            area: "United Kingdom",
+            beginDate: "1988-05-05",
+            endDate: nil,
+            disambiguation: "British singer"
+        ),
+        Artist(
+            name: "The Beatles",
+            imageUrl: nil,
+            bio: "The Beatles were an English rock band formed in Liverpool in 1960.",
+            genre: "Rock",
+            style: "Pop Rock",
+            mood: "Varied",
+            albums: [],
+            artistType: "Group",
+            area: "United Kingdom",
+            beginDate: "1960-01-01",
+            endDate: "1970-04-10",
+            disambiguation: "British rock band"
+        )
+    ]
+}
+
+// MARK: - Previews
+
+#Preview("Artists View") {
+    ArtistsView(
+        showingSearch: .constant(false),
+        musicService: MusicService(),
+        playerService: PlayerService(),
+        pendingNavigation: .constant(nil)
+    )
+}
+
+#Preview("Artwork Image") {
+    VStack(spacing: 20) {
+        ArtworkImage(url: nil, size: 100, systemImage: "music.mic")
+        ArtworkImage(url: nil, size: 100, systemImage: "square.stack")
+        ArtworkImage(url: nil, size: 60, systemImage: "music.note")
+    }
+    .padding()
+}
+
+#Preview("Artist Grid Card") {
+    ArtistGridCard(artist: .preview)
+        .frame(width: 180)
+        .padding()
+}
+
+#Preview("Album Grid Card") {
+    AlbumGridCard(album: .preview, artistName: "Hozier")
+        .frame(width: 180)
+        .padding()
+}
+
+#Preview("Artist Detail View") {
+    NavigationStack {
+        ArtistDetailView(
+            artist: .preview,
+            musicService: MusicService(),
+            playerService: PlayerService()
+        )
+    }
+}
+
+#Preview("Album Detail View") {
+    NavigationStack {
+        AlbumDetailView(
+            album: .preview,
+            musicService: MusicService(),
+            playerService: PlayerService()
+        )
+    }
+}
+
+#Preview("Album Track Row") {
+    List {
+        AlbumTrackRow(track: .preview, playerService: PlayerService())
+        AlbumTrackRow(track: .preview, playerService: PlayerService(), isPlayable: false)
+    }
+}
+
+#Preview("Artist Favorite Button") {
+    HStack(spacing: 20) {
+        ArtistFavoriteButton(artist: .preview)
+        AlbumFavoriteButton(album: .preview)
+    }
+    .padding()
 }
