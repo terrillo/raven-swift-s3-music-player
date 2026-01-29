@@ -129,38 +129,19 @@ struct ContentView: View {
                     }
                 }
             } detail: {
-                if showingPlayer {
-                    NowPlayingDetailView(
-                        playerService: playerService,
-                        musicService: musicService,
-                        cacheService: cacheService,
-                        showingPlayer: $showingPlayer,
-                        onNavigateToArtist: { artist in
-                            pendingNavigation = .artist(artist)
-                            showingPlayer = false
-                            selectedTab = .artists
-                        },
-                        onNavigateToAlbum: { album, artist in
-                            pendingNavigation = .album(album, artist)
-                            showingPlayer = false
-                            selectedTab = .artists
-                        }
-                    )
-                } else {
-                    switch selectedTab {
-                    case .artists:
-                        ArtistsView(showingSearch: $showingSearch, musicService: musicService, playerService: playerService, cacheService: cacheService, pendingNavigation: $pendingNavigation)
-                    case .genres:
-                        GenreView(showingSearch: $showingSearch, musicService: musicService, playerService: playerService, cacheService: cacheService)
-                    case .songs:
-                        SongsView(showingSearch: $showingSearch, musicService: musicService, playerService: playerService, cacheService: cacheService)
-                    case .playlists:
-                        PlaylistView(showingSearch: $showingSearch, musicService: musicService, playerService: playerService, cacheService: cacheService)
-                    case .search:
-                        SearchView(musicService: musicService, playerService: playerService, cacheService: cacheService)
-                    case .settings:
-                        SettingsView(showingSearch: $showingSearch, cacheService: cacheService ?? CacheService(modelContext: modelContext), musicService: musicService)
-                    }
+                switch selectedTab {
+                case .artists:
+                    ArtistsView(showingSearch: $showingSearch, musicService: musicService, playerService: playerService, cacheService: cacheService, pendingNavigation: $pendingNavigation)
+                case .genres:
+                    GenreView(showingSearch: $showingSearch, musicService: musicService, playerService: playerService, cacheService: cacheService)
+                case .songs:
+                    SongsView(showingSearch: $showingSearch, musicService: musicService, playerService: playerService, cacheService: cacheService)
+                case .playlists:
+                    PlaylistView(showingSearch: $showingSearch, musicService: musicService, playerService: playerService, cacheService: cacheService)
+                case .search:
+                    SearchView(musicService: musicService, playerService: playerService, cacheService: cacheService)
+                case .settings:
+                    SettingsView(showingSearch: $showingSearch, cacheService: cacheService ?? CacheService(modelContext: modelContext), musicService: musicService)
                 }
             }
             .onChange(of: showingSearch) { _, newValue in
@@ -168,6 +149,10 @@ struct ContentView: View {
                     selectedTab = .search
                     showingSearch = false
                 }
+            }
+            .sheet(isPresented: $showingPlayer) {
+                NowPlayingSheet(playerService: playerService, musicService: musicService, cacheService: cacheService)
+                    .frame(minWidth: 400, minHeight: 600)
             }
             #endif
             }

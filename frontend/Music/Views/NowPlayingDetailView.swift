@@ -6,6 +6,11 @@
 //
 
 import SwiftUI
+#if os(iOS)
+import UIKit
+#else
+import AppKit
+#endif
 
 struct NowPlayingDetailView: View {
     var playerService: PlayerService
@@ -14,6 +19,8 @@ struct NowPlayingDetailView: View {
     @Binding var showingPlayer: Bool
     var onNavigateToArtist: (Artist) -> Void
     var onNavigateToAlbum: (Album, Artist?) -> Void
+
+    @State private var artworkColor: Color = Color(white: 0.3)
 
     // Look up Artist object by album_artist name
     private var currentArtist: Artist? {
@@ -34,6 +41,66 @@ struct NowPlayingDetailView: View {
         return musicService.albums.first { $0.name == albumName }
     }
 
+    private func extractArtworkColor() {
+        // Try local artwork first
+        if let localURL = playerService.currentLocalArtworkURL {
+            extractColor(from: localURL)
+            return
+        }
+
+        // Try to load from cache service
+        if let urlString = playerService.currentArtworkUrl,
+           let cacheService = cacheService,
+           let localURL = cacheService.localArtworkURL(for: urlString) {
+            extractColor(from: localURL)
+            return
+        }
+
+        // Fall back to downloading if we have a URL
+        if let urlString = playerService.currentArtworkUrl,
+           let url = URL(string: urlString) {
+            Task {
+                do {
+                    let (data, _) = try await URLSession.shared.data(from: url)
+                    await MainActor.run {
+                        #if os(iOS)
+                        if let image = UIImage(data: data), let color = image.averageColor {
+                            withAnimation(.easeInOut(duration: 0.5)) {
+                                artworkColor = color
+                            }
+                        }
+                        #else
+                        if let image = NSImage(data: data), let color = image.averageColor {
+                            withAnimation(.easeInOut(duration: 0.5)) {
+                                artworkColor = color
+                            }
+                        }
+                        #endif
+                    }
+                } catch {
+                    // Silently fail - keep default color
+                }
+            }
+        }
+    }
+
+    private func extractColor(from url: URL) {
+        guard let data = try? Data(contentsOf: url) else { return }
+        #if os(iOS)
+        if let image = UIImage(data: data), let color = image.averageColor {
+            withAnimation(.easeInOut(duration: 0.5)) {
+                artworkColor = color
+            }
+        }
+        #else
+        if let image = NSImage(data: data), let color = image.averageColor {
+            withAnimation(.easeInOut(duration: 0.5)) {
+                artworkColor = color
+            }
+        }
+        #endif
+    }
+
     var body: some View {
         VStack(spacing: 32) {
             // Back button
@@ -45,6 +112,7 @@ struct NowPlayingDetailView: View {
                         Image(systemName: "chevron.left")
                         Text("Back")
                     }
+                    .foregroundStyle(artworkColor.labelPrimary)
                 }
                 .buttonStyle(.plain)
                 Spacer()
@@ -68,6 +136,7 @@ struct NowPlayingDetailView: View {
                 Text(playerService.currentTrack?.title ?? "Not Playing")
                     .font(.title2)
                     .fontWeight(.bold)
+                    .foregroundStyle(artworkColor.labelPrimary)
                     .lineLimit(1)
 
                 // Artist button -> triggers navigation callback
@@ -77,7 +146,7 @@ struct NowPlayingDetailView: View {
                     } label: {
                         Text(artist.name)
                             .font(.title3)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(artworkColor.labelSecondary)
                             .lineLimit(1)
                     }
                     .buttonStyle(.plain)
@@ -93,7 +162,7 @@ struct NowPlayingDetailView: View {
                 } else if let artistName = playerService.currentTrack?.albumArtist ?? playerService.currentTrack?.artist {
                     Text(artistName)
                         .font(.title3)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(artworkColor.labelSecondary)
                         .lineLimit(1)
                 }
 
@@ -104,7 +173,7 @@ struct NowPlayingDetailView: View {
                     } label: {
                         Text(album.name)
                             .font(.subheadline)
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(artworkColor.labelTertiary)
                             .lineLimit(1)
                     }
                     .buttonStyle(.plain)
@@ -120,91 +189,111 @@ struct NowPlayingDetailView: View {
                 } else if let albumName = playerService.currentTrack?.album {
                     Text(albumName)
                         .font(.subheadline)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(artworkColor.labelTertiary)
                         .lineLimit(1)
                 }
             }
 
-            // Progress Bar
-            VStack(spacing: 8) {
-                Slider(value: Binding(
-                    get: { playerService.progress },
-                    set: { playerService.seek(to: $0) }
-                ))
-                .tint(.primary)
+            // Controls Container with Album Art Color Background
+            VStack(spacing: 20) {
+                // Progress Bar
+                VStack(spacing: 8) {
+                    Slider(value: Binding(
+                        get: { playerService.progress },
+                        set: { playerService.seek(to: $0) }
+                    ))
+                    .tint(artworkColor.contrastingForeground)
 
-                HStack {
-                    Text(playerService.formattedCurrentTime)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
-                    Spacer()
-                    Text(playerService.formattedDuration)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
+                    HStack {
+                        Text(playerService.formattedCurrentTime)
+                            .font(.caption)
+                            .foregroundStyle(artworkColor.contrastingSecondary)
+                            .monospacedDigit()
+                        Spacer()
+                        Text(playerService.formattedDuration)
+                            .font(.caption)
+                            .foregroundStyle(artworkColor.contrastingSecondary)
+                            .monospacedDigit()
+                    }
+                }
+
+                // Playback Controls
+                HStack(spacing: 40) {
+                    // Shuffle
+                    Button {
+                        playerService.toggleShuffle()
+                    } label: {
+                        Image(systemName: "shuffle")
+                            .font(.title2)
+                            .foregroundStyle(playerService.isShuffled ? artworkColor.contrastingForeground : artworkColor.contrastingSecondary)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(playerService.isShuffled ? "Shuffle on" : "Shuffle off")
+
+                    // Previous
+                    Button {
+                        playerService.previous()
+                    } label: {
+                        Image(systemName: "backward.fill")
+                            .font(.title)
+                            .foregroundStyle(artworkColor.contrastingForeground)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Previous track")
+
+                    // Play/Pause
+                    Button {
+                        playerService.togglePlayPause()
+                    } label: {
+                        Image(systemName: playerService.isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                            .font(.system(size: 70))
+                            .foregroundStyle(artworkColor.contrastingForeground)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(playerService.isPlaying ? "Pause" : "Play")
+
+                    // Next
+                    Button {
+                        playerService.next()
+                    } label: {
+                        Image(systemName: "forward.fill")
+                            .font(.title)
+                            .foregroundStyle(artworkColor.contrastingForeground)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Next track")
+
+                    // Repeat
+                    Button {
+                        playerService.cycleRepeatMode()
+                    } label: {
+                        Image(systemName: repeatIcon)
+                            .font(.title2)
+                            .foregroundStyle(playerService.repeatMode != .off ? artworkColor.contrastingForeground : artworkColor.contrastingSecondary)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(repeatAccessibilityLabel)
                 }
             }
-            .padding(.horizontal, 20)
-
-            // Playback Controls
-            HStack(spacing: 40) {
-                // Shuffle
-                Button {
-                    playerService.toggleShuffle()
-                } label: {
-                    Image(systemName: "shuffle")
-                        .font(.title2)
-                        .foregroundStyle(playerService.isShuffled ? .primary : .secondary)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(playerService.isShuffled ? "Shuffle on" : "Shuffle off")
-
-                // Previous
-                Button {
-                    playerService.previous()
-                } label: {
-                    Image(systemName: "backward.fill")
-                        .font(.title)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Previous track")
-
-                // Play/Pause
-                Button {
-                    playerService.togglePlayPause()
-                } label: {
-                    Image(systemName: playerService.isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                        .font(.system(size: 70))
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(playerService.isPlaying ? "Pause" : "Play")
-
-                // Next
-                Button {
-                    playerService.next()
-                } label: {
-                    Image(systemName: "forward.fill")
-                        .font(.title)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Next track")
-
-                // Repeat
-                Button {
-                    playerService.cycleRepeatMode()
-                } label: {
-                    Image(systemName: repeatIcon)
-                        .font(.title2)
-                        .foregroundStyle(playerService.repeatMode != .off ? .primary : .secondary)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(repeatAccessibilityLabel)
-            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 20)
+            .background(
+                RoundedRectangle(cornerRadius: 24)
+                    .fill(artworkColor)
+                    .shadow(color: artworkColor.opacity(0.3), radius: 10, y: 5)
+            )
+            .padding(.horizontal)
+            .glassEffect(in: .rect(cornerRadius: 24))
 
             Spacer()
         }
         .padding()
+        .onAppear {
+            extractArtworkColor()
+        }
+        .onChange(of: playerService.currentTrack?.s3Key) { _, _ in
+            extractArtworkColor()
+        }
     }
 
     private var repeatIcon: String {
