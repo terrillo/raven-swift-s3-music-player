@@ -83,6 +83,7 @@ struct ArtworkImage: View {
             .frame(width: size, height: size)
             .background(Color.secondary.opacity(0.1))
             .clipShape(RoundedRectangle(cornerRadius: 8))
+            .shadow(radius: 20)
     }
 
     #if os(iOS)
@@ -126,7 +127,7 @@ struct ArtistGridCard: View {
 
                 if isFavorite {
                     Image(systemName: "heart.fill")
-                        .foregroundStyle(.red)
+                        .foregroundStyle(.pink)
                         .padding(6)
                         .background(.ultraThinMaterial)
                         .clipShape(Circle())
@@ -179,7 +180,7 @@ struct AlbumGridCard: View {
 
                 if isFavorite {
                     Image(systemName: "heart.fill")
-                        .foregroundStyle(.red)
+                        .foregroundStyle(.pink)
                         .padding(6)
                         .background(.ultraThinMaterial)
                         .clipShape(Circle())
@@ -608,15 +609,6 @@ struct AlbumDetailView: View {
             }
             .listRowBackground(Color.clear)
 
-            // Wiki/About section
-            if let wiki = album.wiki {
-                Section("About") {
-                    Text(wiki)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
             // Tracks
             Section("Tracks") {
                 ForEach(album.tracks) { track in
@@ -630,6 +622,15 @@ struct AlbumDetailView: View {
                     }
                     .buttonStyle(.plain)
                     .disabled(!isPlayable)
+                }
+            }
+            
+            // Wiki/About section
+            if let wiki = album.wiki {
+                Section("About") {
+                    Text(wiki)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
                 }
             }
         }
@@ -688,7 +689,7 @@ struct AlbumTrackRow: View {
                 FavoritesStore.shared.toggleTrackFavorite(track)
             } label: {
                 Image(systemName: isFavorite ? "heart.fill" : "heart")
-                    .foregroundStyle(isFavorite ? .red : .secondary)
+                    .foregroundStyle(isFavorite ? .pink : .secondary)
             }
             .buttonStyle(.plain)
 
@@ -718,7 +719,7 @@ struct ArtistFavoriteButton: View {
             FavoritesStore.shared.toggleArtistFavorite(artist)
         } label: {
             Image(systemName: isFavorite ? "heart.fill" : "heart")
-                .foregroundStyle(isFavorite ? .red : .secondary)
+                .foregroundStyle(isFavorite ? .pink : .secondary)
         }
         .buttonStyle(.plain)
     }

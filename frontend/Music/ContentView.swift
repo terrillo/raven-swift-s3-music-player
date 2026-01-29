@@ -34,6 +34,7 @@ enum Tab: String, CaseIterable {
 
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.scenePhase) private var scenePhase
     @State private var selectedTab: Tab = .artists
     @State private var showingSearch = false
     @State private var showingPlayer = false
@@ -166,6 +167,15 @@ struct ContentView: View {
             await musicService.loadCatalog()
             // Sync initial online status
             playerService.isOnline = !musicService.isOffline
+            // Restore playback state after catalog loads
+            if musicService.catalog != nil {
+                playerService.restorePlaybackState(from: musicService)
+            }
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            if newPhase == .background {
+                playerService.savePlaybackState()
+            }
         }
         .onChange(of: musicService.isOffline) { _, isOffline in
             playerService.isOnline = !isOffline

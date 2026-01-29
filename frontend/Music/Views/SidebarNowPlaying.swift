@@ -80,7 +80,7 @@ struct SidebarNowPlaying: View {
                     } label: {
                         Image(systemName: FavoritesStore.shared.isTrackFavorite(track.s3Key) ? "heart.fill" : "heart")
                             .font(.body)
-                            .foregroundStyle(FavoritesStore.shared.isTrackFavorite(track.s3Key) ? .red : .secondary)
+                            .foregroundStyle(FavoritesStore.shared.isTrackFavorite(track.s3Key) ? .pink : .secondary)
                     }
                     .buttonStyle(.plain)
                 }

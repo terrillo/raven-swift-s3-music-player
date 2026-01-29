@@ -62,11 +62,6 @@ struct GenreView: View {
                         )
                     } label: {
                         HStack {
-                            Image(systemName: "guitars")
-                                .font(.title2)
-                                .foregroundStyle(.secondary)
-                                .frame(width: 44, height: 44)
-
                             VStack(alignment: .leading) {
                                 Text(item.genre)
                                     .font(.headline)

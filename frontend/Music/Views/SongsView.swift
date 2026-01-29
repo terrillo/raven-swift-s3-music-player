@@ -157,7 +157,7 @@ struct SongRow: View {
                     FavoritesStore.shared.toggleTrackFavorite(track)
                 } label: {
                     Image(systemName: isFavorite ? "heart.fill" : "heart")
-                        .foregroundStyle(isFavorite ? .red : .secondary)
+                        .foregroundStyle(isFavorite ? .pink : .secondary)
                 }
                 .buttonStyle(.plain)
             }

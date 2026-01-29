@@ -10,10 +10,10 @@ import MediaPlayer
 import AppKit
 #endif
 
-enum RepeatMode {
-    case off
-    case all
-    case one
+enum RepeatMode: Int, Codable {
+    case off = 0
+    case all = 1
+    case one = 2
 }
 
 @MainActor
@@ -683,6 +683,85 @@ class PlayerService {
             guard !Task.isCancelled else { break }
             await cacheService.downloadSingleTrack(track)
         }
+    }
+
+    // MARK: - Playback State Persistence
+
+    func savePlaybackState() {
+        // Only save if there's something meaningful to restore
+        guard currentTrack != nil || !queue.isEmpty else { return }
+
+        let state = PlaybackState(
+            currentTrackKey: currentTrack?.s3Key,
+            currentAlbumId: currentAlbum?.id,
+            queueTrackKeys: queue.map { $0.s3Key },
+            currentIndex: currentIndex,
+            currentTime: currentTime,
+            isShuffled: isShuffled,
+            repeatMode: repeatMode.rawValue,
+            playHistoryKeys: playHistory.map { $0.s3Key },
+            playHistoryIndex: playHistoryIndex,
+            savedAt: Date()
+        )
+        PlaybackState.save(state)
+    }
+
+    func restorePlaybackState(from musicService: MusicService) {
+        guard let state = PlaybackState.load() else { return }
+
+        // Build track lookup dictionary from catalog
+        var trackLookup: [String: Track] = [:]
+        for track in musicService.songs {
+            trackLookup[track.s3Key] = track
+        }
+
+        // Build album lookup dictionary
+        var albumLookup: [String: Album] = [:]
+        for album in musicService.albums {
+            albumLookup[album.id] = album
+        }
+
+        // Resolve queue tracks (filter out any that no longer exist)
+        let restoredQueue = state.queueTrackKeys.compactMap { trackLookup[$0] }
+        guard !restoredQueue.isEmpty else {
+            // No valid tracks to restore
+            PlaybackState.clear()
+            return
+        }
+
+        queue = restoredQueue
+
+        // Resolve current track
+        if let currentKey = state.currentTrackKey,
+           let track = trackLookup[currentKey] {
+            currentTrack = track
+            // Find new index in case queue order changed
+            currentIndex = restoredQueue.firstIndex(where: { $0.s3Key == currentKey }) ?? 0
+        } else {
+            // Current track no longer exists, use first in queue
+            currentTrack = restoredQueue.first
+            currentIndex = 0
+        }
+
+        // Resolve current album
+        if let albumId = state.currentAlbumId {
+            currentAlbum = albumLookup[albumId]
+        }
+
+        // Restore modes
+        isShuffled = state.isShuffled
+        repeatMode = RepeatMode(rawValue: state.repeatMode) ?? .off
+
+        // Restore play history (filter out missing tracks)
+        playHistory = state.playHistoryKeys.compactMap { trackLookup[$0] }
+        playHistoryIndex = min(state.playHistoryIndex, playHistory.count - 1)
+
+        // Restore playback position (don't auto-play)
+        currentTime = state.currentTime
+        duration = Double(currentTrack?.duration ?? 0)
+
+        // Clear saved state after successful restore
+        PlaybackState.clear()
     }
 
     nonisolated func cleanup() {

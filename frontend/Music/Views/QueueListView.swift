@@ -31,13 +31,13 @@ struct QueueListView: View {
             VStack(spacing: 8) {
                 Image(systemName: "music.note.list")
                     .font(.title2)
-                    .foregroundStyle(accentColor.labelSecondary)
+                    .foregroundStyle(accentColor.contrastingForeground)
                 Text(emptyTitle)
                     .font(.headline)
-                    .foregroundStyle(accentColor.labelPrimary)
+                    .foregroundStyle(accentColor.contrastingSecondary)
                 Text(emptyMessage)
                     .font(.caption)
-                    .foregroundStyle(accentColor.labelSecondary)
+                    .foregroundStyle(accentColor.contrastingForeground)
                     .multilineTextAlignment(.center)
             }
             .frame(maxWidth: .infinity)
@@ -52,19 +52,19 @@ struct QueueListView: View {
                             HStack(spacing: 12) {
                                 Text("\(index + 1)")
                                     .font(.caption)
-                                    .foregroundStyle(accentColor.labelTertiary)
+                                    .foregroundStyle(accentColor.contrastingSecondary)
                                     .frame(width: 24)
 
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(track.title)
                                         .font(.body)
-                                        .foregroundStyle(accentColor.labelPrimary)
+                                        .foregroundStyle(accentColor.contrastingForeground)
                                         .lineLimit(1)
 
                                     if let artist = track.artist {
                                         Text(artist)
                                             .font(.caption)
-                                            .foregroundStyle(accentColor.labelSecondary)
+                                            .foregroundStyle(accentColor.contrastingSecondary)
                                             .lineLimit(1)
                                     }
                                 }

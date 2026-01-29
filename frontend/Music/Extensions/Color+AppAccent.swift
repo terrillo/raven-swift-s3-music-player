@@ -10,7 +10,7 @@ extension Color {
         #if os(macOS)
         return .accentColor
         #else
-        return .yellow
+        return .red
         #endif
     }
 }
