@@ -64,6 +64,19 @@ class PlayerService {
         currentTrack != nil
     }
 
+    /// Last 10 played tracks (most recent first)
+    var previousTracks: [Track] {
+        Array(playHistory.suffix(10).reversed())
+    }
+
+    /// Next 10 tracks in queue (empty if shuffle mode since next is dynamic)
+    var upNextTracks: [Track] {
+        guard !isShuffled else { return [] }
+        guard currentIndex + 1 < queue.count else { return [] }
+        let remaining = Array(queue[(currentIndex + 1)...])
+        return Array(remaining.prefix(10))
+    }
+
     var currentArtworkUrl: String? {
         currentAlbum?.imageUrl ?? currentTrack?.embeddedArtworkUrl
     }
@@ -627,6 +640,15 @@ class PlayerService {
         recentAlbums.removeAll()
         playHistory.removeAll()
         playHistoryIndex = -1
+    }
+
+    /// Set up preview data for SwiftUI previews
+    func setupPreviewData(queue: [Track], currentIndex: Int, playHistory: [Track]) {
+        self.queue = queue
+        self.currentIndex = currentIndex
+        self.currentTrack = queue.indices.contains(currentIndex) ? queue[currentIndex] : nil
+        self.playHistory = playHistory
+        self.playHistoryIndex = playHistory.count - 1
     }
 
     // MARK: - Pre-Caching

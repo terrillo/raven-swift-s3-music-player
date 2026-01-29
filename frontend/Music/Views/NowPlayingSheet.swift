@@ -10,6 +10,11 @@ import UIKit
 import AppKit
 #endif
 
+enum QueueSegment: String, CaseIterable {
+    case previous = "Previous"
+    case next = "Next"
+}
+
 struct NowPlayingSheet: View {
     @Environment(\.dismiss) private var dismiss
     var playerService: PlayerService
@@ -17,6 +22,8 @@ struct NowPlayingSheet: View {
     var cacheService: CacheService?
 
     @State private var artworkColor: Color = Color(white: 0.3)
+    @State private var selectedSegment: QueueSegment = .next
+    @State private var showQueue: Bool = false
 
     // Look up Artist object by album_artist name
     private var currentArtist: Artist? {
@@ -99,18 +106,19 @@ struct NowPlayingSheet: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 32) {
-                Spacer()
-
-                // Album Artwork
-                ArtworkImage(
-                    url: playerService.currentArtworkUrl,
-                    size: 320,
-                    systemImage: "music.note",
-                    localURL: playerService.currentLocalArtworkURL,
-                    cacheService: cacheService
-                )
-                .shadow(radius: 20)
+            ScrollView {
+                VStack(spacing: 32) {
+                    // Album Artwork (hidden when queue is shown)
+                    if !showQueue {
+                        ArtworkImage(
+                            url: playerService.currentArtworkUrl,
+                            size: 280,
+                            systemImage: "music.note",
+                            localURL: playerService.currentLocalArtworkURL,
+                            cacheService: cacheService
+                        )
+                        .shadow(radius: 20)
+                    }
 
                 // Track Info
                 VStack(spacing: 8) {
@@ -229,8 +237,8 @@ struct NowPlayingSheet: View {
                         .buttonStyle(.plain)
                     }
 
-                    // Shuffle & Repeat Controls
-                    HStack(spacing: 60) {
+                    // Shuffle, Queue & Repeat Controls
+                    HStack(spacing: 40) {
                         // Shuffle
                         Button {
                             playerService.toggleShuffle()
@@ -240,6 +248,19 @@ struct NowPlayingSheet: View {
                                 .foregroundStyle(playerService.isShuffled ? artworkColor.contrastingForeground : artworkColor.contrastingSecondary)
                         }
                         .accessibilityLabel(playerService.isShuffled ? "Shuffle on" : "Shuffle off")
+                        .buttonStyle(.plain)
+
+                        // Queue
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.3)) {
+                                showQueue.toggle()
+                            }
+                        } label: {
+                            Image(systemName: "list.bullet")
+                                .font(.title2)
+                                .foregroundStyle(showQueue ? artworkColor.contrastingForeground : artworkColor.contrastingSecondary)
+                        }
+                        .accessibilityLabel(showQueue ? "Hide queue" : "Show queue")
                         .buttonStyle(.plain)
 
                         // Repeat
@@ -269,7 +290,58 @@ struct NowPlayingSheet: View {
                 .padding(.horizontal, 24)
                 #endif
 
-                Spacer()
+                // Queue Section (shown when queue button is toggled)
+                if showQueue {
+                    VStack(spacing: 12) {
+                        Picker("Queue", selection: $selectedSegment) {
+                            ForEach(QueueSegment.allCases, id: \.self) { segment in
+                                Text(segment.rawValue).tag(segment)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .padding(.horizontal, 20)
+
+                        if selectedSegment == .previous {
+                            QueueListView(
+                                tracks: playerService.previousTracks,
+                                accentColor: artworkColor,
+                                emptyTitle: "No History",
+                                emptyMessage: "Songs you've played will appear here"
+                            ) { track in
+                                playerService.play(track: track, queue: playerService.queue)
+                            }
+                        } else {
+                            if playerService.isShuffled {
+                                VStack(spacing: 8) {
+                                    Image(systemName: "shuffle")
+                                        .font(.title2)
+                                        .foregroundStyle(artworkColor.labelSecondary)
+                                    Text("Shuffle Active")
+                                        .font(.headline)
+                                        .foregroundStyle(artworkColor.labelPrimary)
+                                    Text("Next track selected based on your listening habits")
+                                        .font(.caption)
+                                        .foregroundStyle(artworkColor.labelSecondary)
+                                        .multilineTextAlignment(.center)
+                                }
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 32)
+                            } else {
+                                QueueListView(
+                                    tracks: playerService.upNextTracks,
+                                    accentColor: artworkColor,
+                                    emptyTitle: "Queue Empty",
+                                    emptyMessage: "No upcoming tracks in queue"
+                                ) { track in
+                                    playerService.play(track: track, queue: playerService.queue)
+                                }
+                            }
+                        }
+                    }
+                    .padding(.top, 16)
+                }
+            }
+            .padding(.vertical, 32)
             }
             .onAppear {
                 extractArtworkColor()
@@ -315,6 +387,43 @@ struct NowPlayingSheet: View {
     }
 }
 
-#Preview {
-    NowPlayingSheet(playerService: PlayerService(), musicService: MusicService())
+// MARK: - Preview
+
+private struct NowPlayingSheetPreview: View {
+    @State private var playerService = PlayerService()
+    private let musicService = MusicService()
+
+    var body: some View {
+        NowPlayingSheet(playerService: playerService, musicService: musicService)
+            .task {
+                // Create sample tracks for preview
+                let sampleTracks = [
+                    Track.preview(title: "Bohemian Rhapsody", artist: "Queen", album: "A Night at the Opera", trackNumber: 1, duration: 354),
+                    Track.preview(title: "Don't Stop Me Now", artist: "Queen", album: "Jazz", trackNumber: 2, duration: 209),
+                    Track.preview(title: "Somebody to Love", artist: "Queen", album: "A Day at the Races", trackNumber: 3, duration: 296),
+                    Track.preview(title: "We Will Rock You", artist: "Queen", album: "News of the World", trackNumber: 4, duration: 122),
+                    Track.preview(title: "We Are the Champions", artist: "Queen", album: "News of the World", trackNumber: 5, duration: 179),
+                    Track.preview(title: "Under Pressure", artist: "Queen", album: "Hot Space", trackNumber: 6, duration: 248),
+                    Track.preview(title: "Radio Ga Ga", artist: "Queen", album: "The Works", trackNumber: 7, duration: 343),
+                    Track.preview(title: "I Want to Break Free", artist: "Queen", album: "The Works", trackNumber: 8, duration: 259),
+                ]
+
+                // Previous tracks (simulating play history - first 3 tracks were played)
+                let historyTracks = Array(sampleTracks[0..<3])
+
+                // Set up the player with sample data
+                // Current track is index 3 "We Will Rock You"
+                // Previous: tracks 0-2 (Bohemian Rhapsody, Don't Stop Me Now, Somebody to Love)
+                // Next: tracks 4-7 (We Are the Champions, Under Pressure, Radio Ga Ga, I Want to Break Free)
+                playerService.setupPreviewData(
+                    queue: sampleTracks,
+                    currentIndex: 3,
+                    playHistory: historyTracks
+                )
+            }
+    }
+}
+
+#Preview("Now Playing") {
+    NowPlayingSheetPreview()
 }
