@@ -15,6 +15,7 @@ enum Tab: String, CaseIterable {
     case playlists = "Playlists"
     #if os(macOS)
     case search = "Search"
+    case upload = "Upload"
     #endif
     case settings = "Cloud"
 
@@ -26,6 +27,7 @@ enum Tab: String, CaseIterable {
         case .playlists: return "music.note.square.stack"
         #if os(macOS)
         case .search: return "magnifyingglass"
+        case .upload: return "arrow.up.circle.fill"
         #endif
         case .settings: return "icloud.fill"
         }
@@ -141,6 +143,8 @@ struct ContentView: View {
                     PlaylistView(showingSearch: $showingSearch, musicService: musicService, playerService: playerService, cacheService: cacheService)
                 case .search:
                     SearchView(musicService: musicService, playerService: playerService, cacheService: cacheService)
+                case .upload:
+                    UploadView()
                 case .settings:
                     SettingsView(showingSearch: $showingSearch, cacheService: cacheService ?? CacheService(modelContext: modelContext), musicService: musicService)
                 }

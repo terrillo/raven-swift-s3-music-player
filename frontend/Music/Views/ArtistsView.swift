@@ -723,7 +723,9 @@ struct AlbumDetailView: View {
                 AlbumFavoriteButton(album: album)
             }
         }
+        #if os(iOS)
         .toolbarBackground(artworkColor, for: .navigationBar)
+        #endif
     }
 }
 
