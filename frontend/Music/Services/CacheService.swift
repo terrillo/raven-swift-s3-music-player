@@ -160,6 +160,58 @@ class CacheService {
         return (try? modelContext.fetchCount(descriptor)) ?? 0
     }
 
+    // MARK: - Artwork Cache Size
+
+    func getArtworkCacheSize() -> Int64 {
+        guard FileManager.default.fileExists(atPath: artworkDirectory.path) else { return 0 }
+
+        var totalSize: Int64 = 0
+        if let enumerator = FileManager.default.enumerator(at: artworkDirectory, includingPropertiesForKeys: [.fileSizeKey]) {
+            while let url = enumerator.nextObject() as? URL {
+                if let fileSize = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize {
+                    totalSize += Int64(fileSize)
+                }
+            }
+        }
+        return totalSize
+    }
+
+    func formattedArtworkCacheSize() -> String {
+        let bytes = getArtworkCacheSize()
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .file
+        return formatter.string(fromByteCount: bytes)
+    }
+
+    func cachedArtworkCount() -> Int {
+        let descriptor = FetchDescriptor<CachedArtwork>()
+        return (try? modelContext.fetchCount(descriptor)) ?? 0
+    }
+
+    func clearArtworkCache() async {
+        do {
+            // Delete artwork files only
+            if FileManager.default.fileExists(atPath: artworkDirectory.path) {
+                try FileManager.default.removeItem(at: artworkDirectory)
+            }
+
+            // Delete artwork database records
+            let artworkDescriptor = FetchDescriptor<CachedArtwork>()
+            let artwork = try modelContext.fetch(artworkDescriptor)
+            for art in artwork {
+                modelContext.delete(art)
+            }
+
+            try modelContext.save()
+
+            // Clear in-memory cache
+            cachedArtworkUrls.removeAll()
+
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
     // MARK: - Download All
 
     // Increased for better throughput - network I/O is the bottleneck, not CPU
@@ -285,13 +337,11 @@ class CacheService {
     func cacheRelatedArtwork(for track: Track, artist: Artist?, album: Album?) async {
         var artworkUrls: [String] = []
 
-        // Add track's embedded artwork
-        if let url = track.embeddedArtworkUrl {
-            artworkUrls.append(url)
-        }
-
-        // Add album artwork
+        // Prefer album artwork over embedded artwork to reduce cache size
+        // Only use embedded artwork if no album art exists
         if let url = album?.imageUrl {
+            artworkUrls.append(url)
+        } else if let url = track.embeddedArtworkUrl {
             artworkUrls.append(url)
         }
 

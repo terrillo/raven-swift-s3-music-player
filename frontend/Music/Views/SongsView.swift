@@ -92,6 +92,8 @@ struct SongRow: View {
     var cacheService: CacheService?
     var isPlayable: Bool = true
     var showFavoriteButton: Bool = true
+    var albumImageUrl: String? = nil
+    var artistImageUrl: String? = nil
 
     private var isCurrentTrack: Bool {
         playerService.currentTrack?.id == track.id
@@ -101,8 +103,14 @@ struct SongRow: View {
         FavoritesStore.shared.isTrackFavorite(track.s3Key)
     }
 
+    /// Prefer album artwork over embedded artwork to reduce cache size
+    /// Falls back to artist image if no album or embedded artwork exists
+    private var preferredArtworkUrl: String? {
+        albumImageUrl ?? track.embeddedArtworkUrl ?? artistImageUrl
+    }
+
     private var localArtworkURL: URL? {
-        guard let urlString = track.embeddedArtworkUrl else { return nil }
+        guard let urlString = preferredArtworkUrl else { return nil }
         return cacheService?.localArtworkURL(for: urlString)
     }
 
@@ -111,7 +119,7 @@ struct SongRow: View {
             // Album artwork with now playing indicator overlay
             ZStack {
                 ArtworkImage(
-                    url: track.embeddedArtworkUrl,
+                    url: preferredArtworkUrl,
                     size: 44,
                     systemImage: "music.note",
                     localURL: localArtworkURL,

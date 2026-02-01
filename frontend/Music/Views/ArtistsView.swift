@@ -24,6 +24,7 @@ struct ArtworkImage: View {
     var cacheService: CacheService? = nil
     var isCircular: Bool = false
 
+    @AppStorage("autoImageCachingEnabled") private var autoImageCachingEnabled = true
     @State private var cachedLocalURL: URL? = nil
     @State private var hasTriggeredDownload = false
     @State private var loadedImage: PlatformImage? = nil
@@ -121,7 +122,9 @@ struct ArtworkImage: View {
     #endif
 
     private func triggerCacheDownload(urlString: String) {
-        guard !hasTriggeredDownload, let cacheService = cacheService else { return }
+        guard !hasTriggeredDownload,
+              let cacheService = cacheService,
+              autoImageCachingEnabled else { return }
         hasTriggeredDownload = true
 
         cacheService.cacheArtworkIfNeeded(urlString) { localURL in

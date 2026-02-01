@@ -12,10 +12,12 @@ struct SettingsView: View {
     var musicService: MusicService
 
     @AppStorage("streamingModeEnabled") private var streamingModeEnabled = false
+    @AppStorage("autoImageCachingEnabled") private var autoImageCachingEnabled = true
     @State private var cdnPrefix: String = NSUbiquitousKeyValueStore.default.string(forKey: "cdnPrefix") ?? MusicService.defaultCDNPrefix
     @State private var showingCacheSheet = false
     @State private var showingClearConfirmation = false
     @State private var showingDeleteAllConfirmation = false
+    @State private var showingClearImageCacheConfirmation = false
 
     var body: some View {
         NavigationStack {
@@ -66,6 +68,41 @@ struct SettingsView: View {
                         showingClearConfirmation = true
                     } label: {
                         Label("Clear Cache", systemImage: "trash")
+                    }
+
+                    Divider()
+
+                    Toggle(isOn: $autoImageCachingEnabled) {
+                        Label {
+                            VStack(alignment: .leading) {
+                                Text("Auto-Cache Images")
+                                Text("Save artwork for offline viewing")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        } icon: {
+                            Image(systemName: "photo.stack")
+                        }
+                    }
+
+                    HStack {
+                        Label("Cached Images", systemImage: "photo.on.rectangle")
+                        Spacer()
+                        Text("\(cacheService.cachedArtworkCount()) images")
+                            .foregroundStyle(.secondary)
+                    }
+
+                    HStack {
+                        Label("Image Cache Size", systemImage: "externaldrive")
+                        Spacer()
+                        Text(cacheService.formattedArtworkCacheSize())
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Button(role: .destructive) {
+                        showingClearImageCacheConfirmation = true
+                    } label: {
+                        Label("Clear Image Cache", systemImage: "photo.badge.minus")
                     }
                 }
 
@@ -154,6 +191,16 @@ struct SettingsView: View {
             } message: {
                 Text("This will permanently delete all cached music, artwork, catalog data, and listening history from this device AND iCloud. This affects all devices using this iCloud account. This action cannot be undone.")
             }
+            .confirmationDialog("Clear Image Cache", isPresented: $showingClearImageCacheConfirmation) {
+                Button("Clear Image Cache", role: .destructive) {
+                    Task {
+                        await cacheService.clearArtworkCache()
+                    }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This will delete all cached images. They will be re-downloaded as you browse.")
+            }
         }
     }
 
@@ -165,15 +212,17 @@ struct SettingsView: View {
                 urls.insert(url)
             }
             for album in artist.albums {
-                if let url = album.imageUrl {
-                    urls.insert(url)
+                if let albumUrl = album.imageUrl {
+                    // Album has artwork - use it, skip embedded artwork from tracks
+                    urls.insert(albumUrl)
+                } else {
+                    // No album artwork - collect embedded artwork from tracks
+                    for track in album.tracks {
+                        if let url = track.embeddedArtworkUrl {
+                            urls.insert(url)
+                        }
+                    }
                 }
-            }
-        }
-
-        for track in musicService.songs {
-            if let url = track.embeddedArtworkUrl {
-                urls.insert(url)
             }
         }
 
