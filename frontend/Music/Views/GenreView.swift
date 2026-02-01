@@ -76,7 +76,7 @@ struct GenreView: View {
                 }
             }
             .refreshable {
-                await musicService.loadCatalog()
+                await musicService.loadCatalog(forceRefresh: true)
             }
         }
     }

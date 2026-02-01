@@ -27,7 +27,8 @@ class MusicService {
         let store = NSUbiquitousKeyValueStore.default
         let base = store.string(forKey: "cdnBaseURL") ?? Self.defaultCDNBase
         let prefix = store.string(forKey: "cdnPrefix") ?? Self.defaultCDNPrefix
-        return URL(string: "\(base)/\(prefix)/catalog.json")
+        let timestamp = Int(Date().timeIntervalSince1970)
+        return URL(string: "\(base)/\(prefix)/catalog.json?\(timestamp)")
     }
 
     /// Sync iCloud Key-Value store on launch
@@ -120,7 +121,7 @@ class MusicService {
         return result.trimmingCharacters(in: .whitespaces)
     }
 
-    func loadCatalog() async {
+    func loadCatalog(forceRefresh: Bool = false) async {
         guard !isLoading else { return }
 
         isLoading = true
@@ -129,6 +130,11 @@ class MusicService {
 
         // Sync iCloud settings first (get latest CDN prefix from macOS)
         Self.syncCloudSettings()
+
+        // Clear cache if force refreshing
+        if forceRefresh {
+            await clearSwiftDataCache()
+        }
 
         // Try loading from SwiftData first
         await loadFromSwiftData()
@@ -292,6 +298,16 @@ class MusicService {
         let metadata = CatalogMetadata(totalTracks: remoteCatalog.totalTracks)
         modelContext.insert(metadata)
 
+        try? modelContext.save()
+    }
+
+    /// Clear SwiftData catalog cache for force refresh
+    private func clearSwiftDataCache() async {
+        guard let modelContext else { return }
+        try? modelContext.delete(model: CatalogTrack.self)
+        try? modelContext.delete(model: CatalogAlbum.self)
+        try? modelContext.delete(model: CatalogArtist.self)
+        try? modelContext.delete(model: CatalogMetadata.self)
         try? modelContext.save()
     }
 }

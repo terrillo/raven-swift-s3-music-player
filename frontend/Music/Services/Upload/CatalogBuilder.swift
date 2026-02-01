@@ -158,68 +158,68 @@ actor CatalogBuilder {
         // Sort tracks by track number
         let sortedTracks = tracks.sorted { ($0.trackNumber ?? 999) < ($1.trackNumber ?? 999) }
 
-        // Fetch album info from TheAudioDB
+        // Get local metadata from first track
+        let localYear = sortedTracks.first?.year
+        let localGenre = sortedTracks.first?.genre
+
+        // === Fetch metadata from all sources ===
+
+        // 1. TheAudioDB (primary source)
         var albumInfo = await theAudioDB.fetchAlbumInfo(artist: artistName, album: albumName)
-        var albumImage = albumInfo.imageUrl
 
-        // Fallback to Last.fm if TheAudioDB doesn't have album data
-        if let lastFM = lastFM, isAlbumInfoEmpty(albumInfo) {
-            let lastFMInfo = await lastFM.fetchAlbumInfo(artist: artistName, album: albumName)
-            albumInfo = mergeAlbumInfo(primary: albumInfo, fallback: lastFMInfo)
-            if albumImage == nil && albumInfo.imageUrl != nil {
-                albumImage = albumInfo.imageUrl
-            }
-        }
-
-        // Fallback to embedded artwork if neither service has it
-        if albumImage == nil {
-            for track in sortedTracks {
-                if let artworkUrl = track.embeddedArtworkUrl {
-                    albumImage = artworkUrl
-                    break
+        // If TheAudioDB doesn't have album by name, try track lookup
+        if albumInfo.name == nil, let firstTrack = sortedTracks.first {
+            let trackInfo = await theAudioDB.fetchTrackInfo(artist: artistName, track: firstTrack.title)
+            if let trackAlbum = trackInfo.album {
+                let correctedAlbumInfo = await theAudioDB.fetchAlbumInfo(artist: artistName, album: trackAlbum)
+                if correctedAlbumInfo.name != nil || correctedAlbumInfo.wiki != nil || correctedAlbumInfo.imageUrl != nil {
+                    albumInfo = correctedAlbumInfo
                 }
             }
         }
 
-        // Fetch release details from MusicBrainz
+        // 2. MusicBrainz (for release details)
         var releaseDetails: ReleaseDetails?
         if let musicBrainz = musicBrainz {
             releaseDetails = await musicBrainz.getReleaseDetails(artist: artistName, album: albumName)
         }
 
-        // Use corrected album name: prefer TheAudioDB, then track search, then MusicBrainz, then local
-        var displayAlbumName = albumName
-        if let correctedName = albumInfo.name {
-            displayAlbumName = correctedName
-        } else if let firstTrack = sortedTracks.first {
-            // Fallback: search for album name via track lookup
-            let trackInfo = await theAudioDB.fetchTrackInfo(artist: artistName, track: firstTrack.title)
-            if let trackAlbum = trackInfo.album {
-                displayAlbumName = trackAlbum
-                // Re-fetch album info with corrected name
-                let correctedAlbumInfo = await theAudioDB.fetchAlbumInfo(artist: artistName, album: trackAlbum)
-                if correctedAlbumInfo.wiki != nil || correctedAlbumInfo.imageUrl != nil {
-                    albumInfo = correctedAlbumInfo
-                    if albumImage == nil && correctedAlbumInfo.imageUrl != nil {
-                        albumImage = correctedAlbumInfo.imageUrl
-                    }
-                }
-            }
+        // 3. Last.fm (fallback for image/wiki)
+        var lastFMInfo: AlbumInfo?
+        if let lastFM = lastFM {
+            lastFMInfo = await lastFM.fetchAlbumInfo(artist: artistName, album: albumName)
         }
 
-        // Final fallback: MusicBrainz title
-        if displayAlbumName == albumName, let mbTitle = releaseDetails?.title {
-            displayAlbumName = mbTitle
-        }
+        // === Apply cascade for each field ===
+        // Priority: TheAudioDB → MusicBrainz → LastFM → Local file metadata
 
-        // Prefer MusicBrainz release date, fallback to TheAudioDB
-        var releaseDate = albumInfo.releaseDate
-        if let mbDate = releaseDetails?.releaseDate {
-            releaseDate = mbDate
-        }
+        // Album name cascade: TheAudioDB → MusicBrainz → LastFM → local folder
+        let displayAlbumName = firstNonEmpty(
+            albumInfo.name,
+            releaseDetails?.title,
+            lastFMInfo?.name
+        ) ?? albumName
 
-        // Album genre: prefer album's own genre, fallback to artist genre
-        let albumGenre = albumInfo.genre ?? artistGenre
+        // Wiki cascade: TheAudioDB → LastFM
+        let wiki = albumInfo.wiki ?? lastFMInfo?.wiki
+
+        // Image cascade: TheAudioDB → LastFM → embedded artwork
+        let albumImage = firstNonEmpty(
+            albumInfo.imageUrl,
+            lastFMInfo?.imageUrl,
+            sortedTracks.first(where: { $0.embeddedArtworkUrl != nil })?.embeddedArtworkUrl
+        )
+
+        // Release date cascade: TheAudioDB → MusicBrainz → local year tag
+        let releaseDate = albumInfo.releaseDate ?? releaseDetails?.releaseDate ?? localYear
+
+        // Genre cascade: TheAudioDB → MusicBrainz tags → local file → artist genre
+        let albumGenre = firstNonEmpty(
+            albumInfo.genre,
+            releaseDetails?.tags.first,
+            localGenre,
+            artistGenre
+        )
 
         // Build catalog tracks
         // Note: s3Key is already correct from the preview/upload phase (uses TheAudioDB-corrected names)
@@ -273,7 +273,7 @@ actor CatalogBuilder {
             id: albumId,
             name: displayAlbumName,
             imageUrl: albumImage,
-            wiki: albumInfo.wiki,
+            wiki: wiki,
             releaseDate: releaseDate,
             genre: albumGenre,
             style: albumInfo.style,
@@ -298,21 +298,14 @@ actor CatalogBuilder {
 
     // MARK: - Helper Methods
 
-    private func isAlbumInfoEmpty(_ info: AlbumInfo) -> Bool {
-        info.imageUrl == nil && info.wiki == nil && info.genre == nil
-    }
-
-    private func mergeAlbumInfo(primary: AlbumInfo, fallback: AlbumInfo) -> AlbumInfo {
-        AlbumInfo(
-            name: primary.name ?? fallback.name,
-            imageUrl: primary.imageUrl ?? fallback.imageUrl,
-            wiki: primary.wiki ?? fallback.wiki,
-            releaseDate: primary.releaseDate ?? fallback.releaseDate,
-            genre: primary.genre ?? fallback.genre,
-            style: primary.style ?? fallback.style,
-            mood: primary.mood ?? fallback.mood,
-            theme: primary.theme ?? fallback.theme
-        )
+    /// Returns the first non-nil, non-empty string from the provided values
+    private func firstNonEmpty(_ values: String?...) -> String? {
+        for value in values {
+            if let v = value, !v.isEmpty {
+                return v
+            }
+        }
+        return nil
     }
 }
 

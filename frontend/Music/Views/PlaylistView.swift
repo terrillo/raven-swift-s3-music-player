@@ -341,7 +341,7 @@ struct Top100View: View {
                     }
                 }
                 .refreshable {
-                    await musicService.loadCatalog()
+                    await musicService.loadCatalog(forceRefresh: true)
                 }
             }
         }
@@ -350,7 +350,7 @@ struct Top100View: View {
             ToolbarItem(placement: .automatic) {
                 Button {
                     Task {
-                        await musicService.loadCatalog()
+                        await musicService.loadCatalog(forceRefresh: true)
                     }
                 } label: {
                     Image(systemName: "arrow.clockwise")
