@@ -279,6 +279,88 @@ class UploadedAlbum {
     }
 }
 
+// MARK: - CachedS3Keys
+
+/// Caches the list of S3 keys to avoid repeated API calls.
+/// TTL-based expiration (5 minutes) ensures fresh data while avoiding N+1 listings.
+@Model
+class CachedS3Keys {
+    /// The S3 bucket name
+    var bucket: String = ""
+
+    /// The S3 prefix (e.g., "music")
+    var prefix: String = ""
+
+    /// Cached set of S3 keys (stored as JSON array for SwiftData compatibility)
+    var keysData: Data = Data()
+
+    /// When the cache was last refreshed
+    var fetchedAt: Date = Date()
+
+    /// Cache time-to-live in seconds (5 minutes)
+    static let ttlSeconds: TimeInterval = 300
+
+    /// Check if the cache has expired
+    var isExpired: Bool {
+        Date().timeIntervalSince(fetchedAt) > Self.ttlSeconds
+    }
+
+    /// Age of cache in seconds
+    var ageSeconds: Int {
+        Int(Date().timeIntervalSince(fetchedAt))
+    }
+
+    /// Decode keys from stored data
+    var keys: Set<String> {
+        get {
+            guard !keysData.isEmpty,
+                  let array = try? JSONDecoder().decode([String].self, from: keysData) else {
+                return []
+            }
+            return Set(array)
+        }
+        set {
+            keysData = (try? JSONEncoder().encode(Array(newValue))) ?? Data()
+        }
+    }
+
+    init(bucket: String, prefix: String, keys: Set<String>) {
+        self.bucket = bucket
+        self.prefix = prefix
+        self.keys = keys
+        self.fetchedAt = Date()
+    }
+}
+
+// MARK: - ScannedFile
+
+/// Tracks scanned files for incremental scanning.
+/// Stores file path and modification date to detect changed files.
+@Model
+class ScannedFile {
+    /// Full file path
+    var path: String = ""
+
+    /// File modification date (from filesystem)
+    var modificationDate: Date = Date()
+
+    /// Generated S3 key for this file
+    var s3Key: String = ""
+
+    /// Last known S3 existence status
+    var existsInS3: Bool = false
+
+    /// When this record was last checked
+    var lastChecked: Date = Date()
+
+    init(path: String, modificationDate: Date, s3Key: String) {
+        self.path = path
+        self.modificationDate = modificationDate
+        self.s3Key = s3Key
+        self.lastChecked = Date()
+    }
+}
+
 // MARK: - Utilities
 
 /// Utilities for sanitizing names for S3 keys and identifiers
@@ -350,5 +432,186 @@ enum UploadIdentifiers {
             return name.components(separatedBy: "/").first?.trimmingCharacters(in: .whitespaces)
         }
         return name.trimmingCharacters(in: .whitespaces)
+    }
+
+    /// Extract artist and album from folder structure when metadata is missing.
+    /// Handles: /path/to/Artist/Album/Track.flac or /path/to/Artist/[E]  Album [123] [2024]/Track.flac
+    /// Returns: (artist, album) cleaned of Tidal formatting
+    static func extractFromFolderPath(_ fileURL: URL, scanFolderURL: URL) -> (artist: String?, album: String?) {
+        // Get path relative to scan folder
+        let filePath = fileURL.path
+        let scanPath = scanFolderURL.path
+
+        // If scan folder is the artist folder (e.g., /Tidal/Ab-Soul), extract artist from folder name
+        let scanFolderName = scanFolderURL.lastPathComponent
+
+        // Get relative path from scan folder to file
+        guard filePath.hasPrefix(scanPath) else {
+            return (nil, nil)
+        }
+
+        let relativePath = String(filePath.dropFirst(scanPath.count + 1)) // +1 for trailing /
+        let parts = relativePath.components(separatedBy: "/")
+
+        // Case 1: Scanning from artist folder (e.g., /Tidal/Ab-Soul)
+        // Relative path: [E]  Album [123] [2024]/Track.flac
+        // parts = ["[E]  Album [123] [2024]", "Track.flac"]
+        if parts.count == 2 {
+            let artist = scanFolderName // Use scan folder name as artist
+            let album = cleanTidalFolderName(parts[0])
+            return (artist, album)
+        }
+
+        // Case 2: Scanning from music root (e.g., /Tidal)
+        // Relative path: Ab-Soul/[E]  Album [123] [2024]/Track.flac
+        // parts = ["Ab-Soul", "[E]  Album [123] [2024]", "Track.flac"]
+        if parts.count >= 3 {
+            let artist = parts[0]
+            let album = cleanTidalFolderName(parts[1])
+            return (artist, album)
+        }
+
+        return (nil, nil)
+    }
+
+    /// Clean Tidal folder name by removing prefixes like "[E]  " and suffixes like "[123456] [2024]".
+    /// Examples:
+    ///   "[E]  Do What Thou Wilt [67884317] [2016]" -> "Do What Thou Wilt"
+    ///   "[E]  These Days [305303726] [2014]" -> "These Days"
+    static func cleanTidalFolderName(_ name: String) -> String {
+        var cleaned = name.trimmingCharacters(in: .whitespaces)
+
+        // Remove Tidal explicit marker prefix "[E]  " or "[E] "
+        if let regex = try? NSRegularExpression(pattern: #"^\[E\]\s+"#, options: .caseInsensitive) {
+            cleaned = regex.stringByReplacingMatches(
+                in: cleaned,
+                range: NSRange(cleaned.startIndex..., in: cleaned),
+                withTemplate: ""
+            )
+        }
+
+        // Remove ALL bracketed content (Tidal adds [ID] [Year])
+        cleaned = cleaned.replacingOccurrences(of: #"\s*\[[^\]]*\]"#, with: "", options: .regularExpression)
+
+        let result = cleaned.trimmingCharacters(in: .whitespaces)
+        return result.isEmpty ? name : result
+    }
+
+    /// Clean album name by removing Tidal-style IDs, years, and edition suffixes.
+    /// Examples:
+    ///   " Sula Bassana [371430601] [2024]" -> "Sula Bassana"
+    ///   "Album (Deluxe Edition) [2024]" -> "Album"
+    ///   "[E]  Do What Thou Wilt [67884317] [2016]" -> "Do What Thou Wilt"
+    static func cleanAlbumName(_ name: String) -> String {
+        var cleaned = name.trimmingCharacters(in: .whitespaces)
+
+        // Remove Tidal explicit marker prefix "[E]  " or "[E] " first
+        if let regex = try? NSRegularExpression(pattern: #"^\[E\]\s+"#, options: .caseInsensitive) {
+            cleaned = regex.stringByReplacingMatches(
+                in: cleaned,
+                range: NSRange(cleaned.startIndex..., in: cleaned),
+                withTemplate: ""
+            )
+        }
+
+        // Remove ALL bracketed content (Tidal adds [ID] [Year])
+        cleaned = cleaned.replacingOccurrences(of: #"\s*\[[^\]]*\]"#, with: "", options: .regularExpression)
+
+        // Remove common suffixes in parentheses
+        let patterns = [
+            #"\s*\([^)]*(?:deluxe|edition|remaster|bonus|expanded)[^)]*\)"#,
+            #"\s*\([^)]*\d{4}[^)]*\)"#  // Year in parens like (2024)
+        ]
+        for pattern in patterns {
+            if let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) {
+                cleaned = regex.stringByReplacingMatches(
+                    in: cleaned,
+                    range: NSRange(cleaned.startIndex..., in: cleaned),
+                    withTemplate: ""
+                )
+            }
+        }
+
+        let result = cleaned.trimmingCharacters(in: .whitespaces)
+        return result.isEmpty ? name : result
+    }
+
+    /// Clean track title by removing Tidal-style formatting.
+    /// Examples:
+    ///   "01 - Ab-Soul - RAW (backwards)" with artist "Ab-Soul" -> "RAW (backwards)"
+    ///   "01 - 20syl - Tempest Ouverture" -> "Tempest Ouverture"
+    ///   "9 Mile(Explicit)" -> "9 Mile"
+    ///   "05. Artist - Song Name" -> "Song Name"
+    ///   "1 Song Name" -> "Song Name"
+    static func cleanTrackTitle(_ title: String, artist: String?) -> String {
+        var cleaned = title.trimmingCharacters(in: .whitespaces)
+
+        // Remove Tidal explicit marker suffix "(Explicit)" or "[Explicit]"
+        if let regex = try? NSRegularExpression(pattern: #"\s*[\(\[]Explicit[\)\]]$"#, options: .caseInsensitive) {
+            cleaned = regex.stringByReplacingMatches(
+                in: cleaned,
+                range: NSRange(cleaned.startIndex..., in: cleaned),
+                withTemplate: ""
+            )
+        }
+
+        // Priority 1: If we know the artist, use it for precise matching
+        // Handles: "01 - Ab-Soul - RAW" where artist contains hyphens
+        if let artist, !artist.isEmpty {
+            let escapedArtist = NSRegularExpression.escapedPattern(for: artist)
+            // Pattern: "01 - Artist - Title" or "01. Artist - Title"
+            let artistPattern = #"^\d{1,2}\s*[\.\-]\s*"# + escapedArtist + #"\s*-\s*(.+)$"#
+            if let regex = try? NSRegularExpression(pattern: artistPattern, options: .caseInsensitive),
+               let match = regex.firstMatch(in: cleaned, range: NSRange(cleaned.startIndex..., in: cleaned)),
+               match.numberOfRanges > 1,
+               let range = Range(match.range(at: 1), in: cleaned) {
+                return String(cleaned[range]).trimmingCharacters(in: .whitespaces)
+            }
+        }
+
+        // Priority 2: "01 - Something" pattern, then strip artist if present
+        if let regex = try? NSRegularExpression(pattern: #"^\d{1,2}\s*[\.\-]\s*(.+)$"#),
+           let match = regex.firstMatch(in: cleaned, range: NSRange(cleaned.startIndex..., in: cleaned)),
+           match.numberOfRanges > 1,
+           let range = Range(match.range(at: 1), in: cleaned) {
+            let result = String(cleaned[range]).trimmingCharacters(in: .whitespaces)
+
+            // If result starts with artist name, remove it (handles unknown artist case)
+            if let artist, !artist.isEmpty {
+                let escapedArtist = NSRegularExpression.escapedPattern(for: artist)
+                let artistPattern = "^\(escapedArtist)\\s*-\\s*"
+                if let artistRegex = try? NSRegularExpression(pattern: artistPattern, options: .caseInsensitive) {
+                    let strippedResult = artistRegex.stringByReplacingMatches(
+                        in: result,
+                        range: NSRange(result.startIndex..., in: result),
+                        withTemplate: ""
+                    ).trimmingCharacters(in: .whitespaces)
+                    if !strippedResult.isEmpty {
+                        return strippedResult
+                    }
+                }
+            }
+
+            // Fallback: try generic "Something - Title" pattern (for unknown artist)
+            // Use last occurrence of " - " to handle hyphenated artist names
+            if let lastDashRange = result.range(of: " - ", options: .backwards) {
+                let afterDash = String(result[lastDashRange.upperBound...]).trimmingCharacters(in: .whitespaces)
+                if !afterDash.isEmpty {
+                    return afterDash
+                }
+            }
+
+            return result
+        }
+
+        // Priority 3: "01 Title" (just track number prefix with space)
+        if let regex = try? NSRegularExpression(pattern: #"^\d{1,2}\s+(.+)$"#),
+           let match = regex.firstMatch(in: cleaned, range: NSRange(cleaned.startIndex..., in: cleaned)),
+           match.numberOfRanges > 1,
+           let range = Range(match.range(at: 1), in: cleaned) {
+            return String(cleaned[range]).trimmingCharacters(in: .whitespaces)
+        }
+
+        return cleaned
     }
 }
