@@ -509,4 +509,56 @@ class CacheService {
             self.error = error.localizedDescription
         }
     }
+
+    // MARK: - Clear All Data (Cache + Catalog)
+
+    /// Clears all cache files, cache records, and catalog data from SwiftData.
+    /// Use this for "Delete All Data" functionality.
+    func clearAllData() async {
+        do {
+            // Delete cache files
+            if FileManager.default.fileExists(atPath: cacheDirectory.path) {
+                try FileManager.default.removeItem(at: cacheDirectory)
+            }
+
+            // Delete cache records (batch delete works fine for these)
+            try modelContext.delete(model: CachedTrack.self)
+            try modelContext.delete(model: CachedArtwork.self)
+
+            // Delete catalog records - must fetch and delete individually due to relationships
+            // Batch delete doesn't respect cascade rules properly
+            let trackDescriptor = FetchDescriptor<CatalogTrack>()
+            let tracks = try modelContext.fetch(trackDescriptor)
+            for track in tracks {
+                modelContext.delete(track)
+            }
+
+            let albumDescriptor = FetchDescriptor<CatalogAlbum>()
+            let albums = try modelContext.fetch(albumDescriptor)
+            for album in albums {
+                modelContext.delete(album)
+            }
+
+            let artistDescriptor = FetchDescriptor<CatalogArtist>()
+            let artists = try modelContext.fetch(artistDescriptor)
+            for artist in artists {
+                modelContext.delete(artist)
+            }
+
+            let metadataDescriptor = FetchDescriptor<CatalogMetadata>()
+            let metadata = try modelContext.fetch(metadataDescriptor)
+            for meta in metadata {
+                modelContext.delete(meta)
+            }
+
+            try modelContext.save()
+
+            // Clear in-memory caches
+            cachedTrackKeys.removeAll()
+            cachedArtworkUrls.removeAll()
+
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
 }

@@ -4,14 +4,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-A Music app with a SwiftUI iOS/macOS frontend and Python backend for uploading music to DigitalOcean Spaces. The app supports **offline playback only** - tracks must be cached locally before they can be played.
+A unified Swift music app for iOS and macOS with integrated upload capabilities. The app supports **offline playback only** - tracks must be cached locally before they can be played. Music uploads are handled natively on macOS through a built-in upload interface.
 
 ## Build Commands
 
-### iOS/macOS Frontend
 ```bash
-# Build from command line
+# Build for iOS Simulator
 xcodebuild -project frontend/Music.xcodeproj -scheme Music -destination 'platform=iOS Simulator,name=iPhone 16' build
+
+# Build for macOS
+xcodebuild -project frontend/Music.xcodeproj -scheme Music -destination 'platform=macOS' build
 
 # Run tests
 xcodebuild -project frontend/Music.xcodeproj -scheme Music -destination 'platform=iOS Simulator,name=iPhone 16' test
@@ -19,185 +21,215 @@ xcodebuild -project frontend/Music.xcodeproj -scheme Music -destination 'platfor
 
 Alternatively, open `frontend/Music.xcodeproj` in Xcode and use Cmd+B to build, Cmd+R to run.
 
-### Backend (Python)
-```bash
-cd backend
-pip install -r requirements.txt
-python upload_music.py              # Backwards-compatible
-python -m backend.main              # Package-style (from parent dir)
-python upload_music.py --dry-run    # Scan only, no uploads
-python upload_music.py --verbose    # Verbose output
-python upload_music.py --workers 8  # Custom parallel workers
-```
-
-Required `.env` file in `backend/`:
-```
-DO_SPACES_KEY=your_key
-DO_SPACES_SECRET=your_secret
-DO_SPACES_BUCKET=your_bucket
-DO_SPACES_REGION=sfo3
-DO_SPACES_PREFIX=music              # Optional, S3 path prefix (default: music)
-MUSICBRAINZ_CONTACT=your@email.com  # Optional, for better rate limit tolerance
-MUSICBRAINZ_ENABLED=true            # Optional, default true
-LASTFM_API_KEY=your_key             # Optional, fallback for album metadata
-```
-
-### Backend Tests
-```bash
-# Generate catalog first (required for integration tests)
-cd backend && python upload_music.py --dry-run
-
-# Run all tests
-python -m pytest tests/ -v
-
-# Run specific test file
-python -m pytest tests/test_catalog.py -v
-
-# Run with coverage
-python -m pytest tests/ -v --cov=backend
-```
-
-**Test Files:**
-- `tests/test_catalog.py` - Integration tests comparing generated catalog against expected fixtures
-- `tests/test_conversion.py` - Integration tests for FLAC to M4A conversion (uses Santana album)
-- `tests/1-hozier-test.json` - Fixture for TheAudioDB album name correction
-- `tests/2-mikko-test.json` - Fixture for Last.fm fallback
-- `tests/test_identifiers.py` - Unit tests for S3 key sanitization
-- `tests/test_theaudiodb.py` - Unit tests for album name normalization
-- `tests/test_lastfm.py` - Unit tests for Last.fm helpers
-
 ## Architecture
 
-### Frontend (`frontend/Music/`)
+### Directory Structure
 
-**Models/**
-- `MusicCatalog.swift` - Codable models: `MusicCatalog`, `Artist`, `Album`, `Track`
-- `CacheModels.swift` - SwiftData models: `CachedTrack`, `CachedArtwork`, `CachedCatalog` for offline storage tracking
+```
+frontend/Music/
+├── Models/
+│   ├── CatalogModels.swift       # SwiftData models: CatalogArtist, CatalogAlbum, CatalogTrack
+│   ├── MusicCatalog.swift        # Codable DTOs: MusicCatalog, Artist, Album, Track
+│   ├── CacheModels.swift         # SwiftData: CachedTrack, CachedArtwork
+│   ├── NavigationDestination.swift
+│   ├── PlaybackState.swift
+│   └── ViewMode.swift
+├── Services/
+│   ├── MusicService.swift        # Loads catalog from SwiftData
+│   ├── PlayerService.swift       # AVPlayer, Now Playing, queue management
+│   ├── CacheService.swift        # Track/artwork download and caching
+│   ├── ShuffleService.swift      # Weighted random selection (9 factors)
+│   ├── AnalyticsStore.swift      # Core Data + CloudKit play analytics
+│   ├── FavoritesStore.swift      # Favorites management
+│   ├── StatisticsService.swift   # Music statistics
+│   └── Upload/                   # macOS-only upload services
+│       ├── MusicUploader.swift           # Main orchestrator
+│       ├── UploadConfiguration.swift     # Keychain credential storage
+│       ├── StorageService.swift          # S3/DigitalOcean Spaces client
+│       ├── MetadataExtractor.swift       # AVFoundation tag extraction
+│       ├── ArtworkExtractor.swift        # Embedded artwork extraction
+│       ├── AudioConverter.swift          # FLAC→M4A via ffmpeg
+│       ├── CatalogBuilder.swift          # Catalog JSON generation
+│       ├── Identifiers.swift             # S3 key sanitization
+│       ├── MusicBrainzService.swift      # MBID lookups
+│       ├── TheAudioDBService.swift       # Artist/album metadata
+│       └── LastFMService.swift           # Album metadata fallback
+├── Views/
+│   ├── ContentView.swift                 # TabView (iOS) / NavigationSplitView (macOS)
+│   ├── ArtistsView.swift                 # Artist list, ArtistDetailView, AlbumDetailView
+│   ├── AlbumsView.swift                  # Album browsing
+│   ├── SongsView.swift                   # All songs with SongRow
+│   ├── GenreView.swift                   # Genre browsing
+│   ├── SearchView.swift                  # Global search
+│   ├── PlaylistView.swift                # Auto-generated playlists
+│   ├── NowPlayingSheet.swift             # Full-screen player
+│   ├── NowPlayingAccessory.swift         # iOS 18 tab bar mini-player
+│   ├── SidebarNowPlaying.swift           # macOS sidebar player
+│   ├── QueueListView.swift               # Queue display
+│   ├── CacheDownloadView.swift           # Download progress
+│   ├── SettingsView.swift                # Settings & cache management
+│   ├── StatisticsView.swift              # Play statistics
+│   └── UploadView.swift                  # macOS-only upload interface
+├── Extensions/
+│   ├── Image+DominantColor.swift
+│   └── Color+AppAccent.swift
+├── MusicApp.swift                        # App entry with SwiftData container
+└── MusicDB.xcdatamodeld                  # Core Data schema (analytics)
+```
 
-**Services/**
-- `MusicService.swift` - Fetches catalog JSON from CDN (with cache-busting timestamp), provides artists/albums/songs arrays, supports offline catalog caching
-- `PlayerService.swift` - Audio playback with AVPlayer, system Now Playing integration, queue management, session tracking for smart shuffle
-- `CacheService.swift` - Downloads and caches music/artwork for offline playback using SwiftData, cascading artwork caching for artists/albums
-- `ShuffleService.swift` - Weighted random track selection with 9 intelligence factors for smart shuffle
-- `AnalyticsStore.swift` - Core Data + CloudKit analytics with play counts, skip tracking, completion rates, and time-of-day preferences
+### Data Models
 
-**Views/**
-- `ContentView.swift` - Main view with TabView (iOS) or NavigationSplitView (macOS), offline mode banner
-- `ArtistsView.swift` - Artist list with grid/list toggle, `ArtistDetailView`, `AlbumDetailView`, `ArtworkImage`, `ArtistGridCard`, `AlbumGridCard`, `ViewMode` enum
-- `AlbumsView.swift` - Album list with grid/list toggle and navigation to detail
-- `SongsView.swift` - All songs list with `SongRow` component (shows cache status)
-- `NowPlayingAccessory.swift` - iOS 18 tab bar accessory (compact player)
-- `NowPlayingSheet.swift` - Full-screen player with seekable progress slider
-- `SidebarNowPlaying.swift` - macOS/iPadOS sidebar player card
-- `SettingsView.swift` - Cache management (download all, clear cache, cache size)
-- `CacheDownloadView.swift` - Modal with per-track download progress, passes catalog for cascading artwork
-- `PlaylistView.swift`, `SearchView.swift` - Placeholder views
+**SwiftData Catalog Models** (`CatalogModels.swift`):
+```swift
+@Model class CatalogArtist    // Persistent artist with albums relationship
+@Model class CatalogAlbum     // Persistent album with tracks relationship
+@Model class CatalogTrack     // Persistent track (s3Key is unique identifier)
+@Model class CatalogMetadata  // Catalog sync metadata
+```
 
-**Key Patterns:**
-- Uses `@Observable` macro for services (requires iOS 17+)
-- Uses SwiftData for cache tracking (requires iOS 17+)
-- Platform-specific code wrapped in `#if os(iOS)` / `#if os(macOS)`
-- `ArtworkImage` component handles async image loading with local cache fallback
+**Codable DTOs** (`MusicCatalog.swift`):
+```swift
+struct MusicCatalog, Artist, Album, Track  // For JSON serialization
+```
+
+**Cache Tracking** (`CacheModels.swift`):
+```swift
+@Model class CachedTrack      // Downloaded audio file reference
+@Model class CachedArtwork    // Downloaded artwork reference
+```
+
+### Services
+
+**MusicService** - Loads catalog exclusively from SwiftData (no remote fetching). Consolidates artist variations and caches computed properties.
+
+**PlayerService** - AVPlayer-based playback with system Now Playing integration, queue management, and session tracking for smart shuffle.
+
+**CacheService** - Downloads tracks and artwork to `~/Documents/MusicCache/`, tracks downloads via SwiftData.
+
+**ShuffleService** - Weighted random selection with 9 intelligence factors:
+1. Base weight by play count
+2. Skip penalty (exponential decay)
+3. Artist diversity (avoids clustering)
+4. Album spread
+5. Session memory (90% penalty for played tracks)
+6. Rediscovery boost (50% for 30+ day old tracks)
+7. Genre continuity (50% boost)
+8. Mood continuity (30% boost)
+9. Time-of-day preferences (20% boost)
+
+**AnalyticsStore** - Core Data + CloudKit for play counts, skip tracking, completion rates, and time preferences.
+
+### Upload Services (macOS Only)
+
+The `Services/Upload/` directory contains the complete upload pipeline:
+
+**MusicUploader** - Orchestrates the upload workflow:
+1. Scan folder for audio files
+2. Extract metadata in parallel
+3. Lookup corrections via TheAudioDB/MusicBrainz
+4. Upload to S3 with AWS Signature V4
+5. Build catalog and save to SwiftData
+
+**StorageService** - S3-compatible client for DigitalOcean Spaces with AWS Signature V4 authentication.
+
+**MetadataExtractor** - Extracts tags from audio files using AVFoundation.
+
+**ArtworkExtractor** - Extracts embedded album art from audio files.
+
+**AudioConverter** - Converts FLAC to M4A using ffmpeg subprocess.
+
+**CatalogBuilder** - Generates hierarchical catalog JSON from processed tracks.
+
+**External API Services**:
+- `TheAudioDBService` - Artist bios, images, album metadata
+- `MusicBrainzService` - MBID lookups for accurate artist/album matching
+- `LastFMService` - Fallback for album artwork and wiki
+
+**UploadConfiguration** - Credentials stored securely in macOS Keychain:
+- DigitalOcean Spaces: key, secret, bucket, region, prefix
+- Optional: Last.fm API key, MusicBrainz contact email
+
+### Key Patterns
+
+- `@Observable` macro for services (iOS 17+)
+- SwiftData for catalog and cache persistence (iOS 17+)
+- Platform-specific code: `#if os(iOS)` / `#if os(macOS)`
+- `@AppStorage` for view preferences (grid/list mode)
 - Tab bar uses `.tabViewBottomAccessory` for Now Playing (iOS 18+)
 - macOS sidebar uses `.safeAreaInset(edge: .bottom)` for Now Playing
-- `@AppStorage` for persisting view mode preferences (grid/list)
-- `ViewMode` enum with segmented picker for toggling between grid and list layouts
 
-**Playback Behavior:**
-- **Cached-only mode**: Tracks must be downloaded before they can be played
+### Playback Behavior
+
+- **Cached-only mode**: Tracks must be downloaded before playback
 - Non-cached tracks appear dimmed (50% opacity) and are disabled
-- System Now Playing integration: lock screen, Control Center, headphone controls
+- System Now Playing: lock screen, Control Center, headphone controls
 - Background audio playback supported
 
-**Smart Shuffle:**
-The shuffle system uses weighted random selection with 9 intelligence factors:
+## Platform Features
 
-1. **Base weight by play count** - Unplayed tracks weighted higher (10.0) than frequently played (3.0)
-2. **Skip penalty** - Exponential decay (0.3^n) for skipped tracks, extra penalty for recent skips
-3. **Artist diversity** - Penalizes same artist in last 5 tracks to avoid clustering
-4. **Album spread** - Penalizes tracks from recently played albums
-5. **Session memory** - Strongly penalizes (90%) tracks already played this session
-6. **Rediscovery boost** - 50% boost for tracks not played in 30+ days
-7. **Genre continuity** - 50% boost for matching genre with current track
-8. **Mood continuity** - 30% boost for matching mood with current track
-9. **Time-of-day preferences** - Up to 20% boost for tracks frequently played at current time period (morning/afternoon/evening/night)
+| Feature | iOS | macOS |
+|---------|-----|-------|
+| Browse Music | Yes | Yes |
+| Offline Playback | Yes | Yes |
+| Cache Management | Yes | Yes |
+| Smart Shuffle | Yes | Yes |
+| Upload Music | No | Yes |
+| Search | Yes | Yes |
+| Favorites | Yes | Yes |
+| Statistics | Yes | Yes |
 
-Key files:
-- `ShuffleService.swift` - Weight calculation with `ShuffleContext` struct
-- `PlayerService.swift` - Session tracking (`sessionPlayedKeys`, `recentArtists`, `recentAlbums`)
-- `AnalyticsStore.swift` - Query methods: `fetchLastPlayDates()`, `fetchCompletionRates()`, `fetchTimeOfDayPreferences()`
-- `MusicDB.xcdatamodeld` - `PlayEventEntity` includes `completionRate` attribute
+## Upload Workflow (macOS)
 
-### Backend (`backend/`)
+1. Open Upload tab in sidebar
+2. Configure DigitalOcean Spaces credentials (stored in Keychain)
+3. Select music folder to scan
+4. Preview detected files (paginated table showing new vs existing)
+5. Start upload - files are uploaded with metadata enrichment
+6. Catalog is saved to SwiftData (available immediately for playback)
 
-The backend is organized as a Python package with clear separation of concerns:
+### Critical: s3_key Uses Corrected Album Name
 
-```
-backend/
-├── main.py                 # Entry point with MusicUploader orchestrator
-├── config.py               # Configuration classes, env loading, constants
-├── upload_music.py         # Backwards-compatible wrapper script
-├── services/
-│   ├── storage.py          # StorageService - S3/Spaces uploads
-│   ├── theaudiodb.py       # TheAudioDBService - TheAudioDB API integration
-│   ├── musicbrainz.py      # MusicBrainzService - MBID lookups for accuracy
-│   └── lastfm.py           # LastFMService - Last.fm API fallback for album metadata
-├── extractors/
-│   ├── metadata.py         # MetadataExtractor - audio tag extraction
-│   └── artwork.py          # ArtworkExtractor - embedded artwork extraction
-├── processors/
-│   ├── audio.py            # AudioProcessor - file scanning, ffmpeg conversion
-│   └── catalog.py          # CatalogBuilder - catalog JSON generation
-├── models/
-│   ├── track.py            # TrackMetadata dataclass
-│   └── catalog.py          # Artist, Album, Catalog, ArtistInfo, AlbumInfo, TrackInfo dataclasses
-└── utils/
-    ├── cache.py            # ThreadSafeCache generic class
-    └── identifiers.py      # S3 key sanitization, year extraction utilities
-```
-
-**Key Classes:**
-- `MusicUploader` (main.py) - Orchestrates the upload workflow
-- `StorageService` - DigitalOcean Spaces interactions with retry logic
-- `TheAudioDBService` - TheAudioDB API for artist bio/images, album metadata (thread-safe caching)
-- `MusicBrainzService` - Fetches MBIDs for accurate lookups
-- `LastFMService` - Last.fm API fallback for album artwork and wiki when TheAudioDB has no data
-- `MetadataExtractor` - Extracts tags from MP3/M4A/FLAC using mutagen
-- `ArtworkExtractor` - Extracts embedded album art (APIC/covr/Picture)
-- `AudioProcessor` - Scans directories, converts to m4a via ffmpeg
-- `CatalogBuilder` - Builds hierarchical JSON from tracks
-
-**Features:**
-- Scans `music/` directory for audio files (mp3, m4a, flac, wav, aac)
-- Extracts metadata using mutagen (title, artist, album, track number, duration)
-- Extracts embedded album art from audio files
-- Uses MusicBrainz IDs (MBIDs) for accurate TheAudioDB API lookups
-- **Artist images from TheAudioDB** (strArtistThumb, strArtistFanart)
-- **Album artwork from TheAudioDB** (strAlbumThumb) with embedded art as fallback
-- Fetches bio, genre, style, mood from TheAudioDB API
-- **Rich metadata fields**: Separate genre, style, mood, theme fields for artists, albums, and tracks
-- **Name correction**: Uses TheAudioDB/MusicBrainz canonical names
-- Uploads files and artwork to DigitalOcean Spaces with UUID-based filenames
-- Generates `music_catalog.json` with streaming URLs
-- Retry logic with exponential backoff for large file uploads
-- Optimized transfer config for multipart uploads (FLAC files can be 50MB+)
-- CLI arguments: `--dry-run`, `--verbose`, `--workers N`
-- **Last.fm fallback**: When TheAudioDB has no album data, Last.fm is used as fallback for album artwork and wiki
-- Album folders are uploaded to match the TheAudioDB album name
-
-**Critical: s3_key Must Use Corrected Album Name**
-
-The `s3_key` in the catalog JSON must use the **corrected album name from TheAudioDB**, not the local folder name. This is essential for the frontend to find files correctly.
+The `s3_key` must use the **corrected album name from TheAudioDB**, not the local folder name.
 
 Example:
 - Local folder: `Hozier/Hozier-DeLuxe-Version/Take-Me-To-Church.mp3`
-- TheAudioDB returns album name: `Hozier`
+- TheAudioDB album name: `Hozier`
 - Correct s3_key: `Hozier/Hozier/Take-Me-To-Church.mp3`
-- Wrong s3_key: `Hozier/Hozier-DeLuxe-Version/Take-Me-To-Church.mp3`
 
-The `CatalogBuilder._build_album()` method handles this by updating the s3_key when `display_album_name != album_name`. Do not break this behavior.
+`CatalogBuilder` handles this correction automatically.
 
-**Catalog JSON Structure:**
+## Cache Storage
+
+Location: `~/Documents/MusicCache/`
+- `tracks/` - Downloaded audio files (SHA256 hashed filenames)
+- `artwork/` - Downloaded artwork (SHA256 hashed filenames)
+
+Tracked via SwiftData (`CachedTrack`, `CachedArtwork` models).
+
+## CDN URL
+
+Audio and artwork served from: `https://terrillo.sfo3.cdn.digitaloceanspaces.com/music/`
+
+## Data Flow
+
+```
+macOS Upload:
+[Audio Files] → MetadataExtractor → TheAudioDB/MusicBrainz → AudioConverter
+     ↓
+StorageService (S3 upload)
+     ↓
+CatalogBuilder → SwiftData (CatalogArtist/Album/Track)
+
+iOS/macOS Playback:
+SwiftData → MusicService → UI
+     ↓
+CacheService → Downloads tracks/artwork → Offline playback
+     ↓
+AnalyticsStore → Core Data + CloudKit
+```
+
+## Catalog JSON Structure
+
 ```json
 {
   "artists": [{
@@ -243,22 +275,3 @@ The `CatalogBuilder._build_album()` method handles this by updating the s3_key w
   }]
 }
 ```
-
-### Music Files (`music/`)
-- Local music library organized as `Artist/Album/Track.mp3|m4a|flac`
-- Supported formats: mp3, m4a, flac, wav, aac
-
-## CDN URL
-Catalog is served from: `https://terrillo.sfo3.cdn.digitaloceanspaces.com/music/music_catalog.json`
-
-## Cache Storage
-- Location: `~/Documents/MusicCache/`
-  - `tracks/` - Downloaded audio files (SHA256 hashed filenames)
-  - `artwork/` - Downloaded artwork (SHA256 hashed filenames)
-- Tracked via SwiftData (`CachedTrack`, `CachedArtwork`, `CachedCatalog` models)
-
-## Offline Support
-- **Catalog caching**: Catalog JSON is cached locally via `CachedCatalog` model for fully offline browsing
-- **Cascading artwork**: When tracks are downloaded, related artist and album images are automatically cached
-- **Offline banner**: Shows "Offline Mode" with last updated time when network is unavailable
-- **View mode persistence**: Grid/list preferences saved via `@AppStorage` and persist across launches

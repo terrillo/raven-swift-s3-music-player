@@ -19,24 +19,6 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             List {
-                if musicService.isOffline {
-                    Section {
-                        Label {
-                            VStack(alignment: .leading) {
-                                Text("Offline Mode")
-                                if let lastUpdated = musicService.lastUpdated {
-                                    Text("Updated \(lastUpdated.formatted(.relative(presentation: .named)))")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                        } icon: {
-                            Image(systemName: "wifi.slash")
-                                .foregroundStyle(.orange)
-                        }
-                    }
-                }
-
                 Section("Playback") {
                     Toggle(isOn: $streamingModeEnabled) {
                         Label {
@@ -50,7 +32,6 @@ struct SettingsView: View {
                             Image(systemName: "antenna.radiowaves.left.and.right")
                         }
                     }
-                    .disabled(musicService.isOffline)
                 }
 
                 Section("Storage") {
@@ -130,13 +111,13 @@ struct SettingsView: View {
             .confirmationDialog("Delete All Data", isPresented: $showingDeleteAllConfirmation) {
                 Button("Delete All Data", role: .destructive) {
                     Task {
-                        await cacheService.clearCache()
+                        await cacheService.clearAllData()
                         AnalyticsStore.shared.clearAllData()
                     }
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("This will permanently delete all cached music, artwork, and listening history from this device AND iCloud. This affects all devices using this iCloud account. This action cannot be undone.")
+                Text("This will permanently delete all cached music, artwork, catalog data, and listening history from this device AND iCloud. This affects all devices using this iCloud account. This action cannot be undone.")
             }
         }
     }
@@ -167,7 +148,7 @@ struct SettingsView: View {
 
 #Preview {
     do {
-        let container = try ModelContainer(for: CachedTrack.self, CachedArtwork.self, CachedCatalog.self)
+        let container = try ModelContainer(for: CachedTrack.self, CachedArtwork.self)
         return SettingsView(
             showingSearch: .constant(false),
             cacheService: CacheService(modelContext: container.mainContext),

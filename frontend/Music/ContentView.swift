@@ -15,6 +15,7 @@ enum Tab: String, CaseIterable {
     case playlists = "Playlists"
     #if os(macOS)
     case search = "Search"
+    case upload = "Upload"
     #endif
     case settings = "Cloud"
 
@@ -26,6 +27,7 @@ enum Tab: String, CaseIterable {
         case .playlists: return "music.note.square.stack"
         #if os(macOS)
         case .search: return "magnifyingglass"
+        case .upload: return "arrow.up.circle"
         #endif
         case .settings: return "icloud.fill"
         }
@@ -43,26 +45,34 @@ struct ContentView: View {
     @State private var cacheService: CacheService?
     @State private var pendingNavigation: NavigationDestination? = nil
 
-    var body: some View {
-        VStack(spacing: 0) {
-            // Offline banner
-            if musicService.isOffline {
-                HStack {
-                    Image(systemName: "wifi.slash")
-                    Text("Offline Mode")
-                    if let lastUpdated = musicService.lastUpdated {
-                        Text("• Updated \(lastUpdated.formatted(.relative(presentation: .named)))")
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .font(.caption)
-                .padding(.vertical, 6)
-                .frame(maxWidth: .infinity)
-                .background(.orange.opacity(0.2))
+    /// Empty state shown when no music has been uploaded yet
+    private var emptyStateView: some View {
+        ContentUnavailableView {
+            Label("No Music Yet", systemImage: "music.note")
+        } description: {
+            #if os(macOS)
+            Text("Go to the Upload tab to add your music library.")
+            #else
+            Text("Use the macOS app to upload your music library.")
+            #endif
+        } actions: {
+            #if os(macOS)
+            Button("Go to Upload") {
+                selectedTab = .upload
             }
+            .buttonStyle(.borderedProminent)
+            #endif
+        }
+    }
 
-            Group {
-                #if os(iOS)
+    var body: some View {
+        Group {
+            #if os(iOS)
+            if musicService.isLoading {
+                ProgressView("Loading catalog...")
+            } else if musicService.isEmpty {
+                emptyStateView
+            } else {
                 TabView(selection: $selectedTab) {
                 ArtistsView(showingSearch: $showingSearch, musicService: musicService, playerService: playerService, cacheService: cacheService, pendingNavigation: .constant(nil))
                     .tabItem {
@@ -105,6 +115,7 @@ struct ContentView: View {
             .sheet(isPresented: $showingPlayer) {
                 NowPlayingSheet(playerService: playerService, musicService: musicService, cacheService: cacheService)
             }
+            }  // end else (has content)
             #else
             NavigationSplitView {
                 List(Tab.allCases, id: \.self, selection: $selectedTab) { tab in
@@ -130,19 +141,41 @@ struct ContentView: View {
                     }
                 }
             } detail: {
-                switch selectedTab {
-                case .artists:
-                    ArtistsView(showingSearch: $showingSearch, musicService: musicService, playerService: playerService, cacheService: cacheService, pendingNavigation: $pendingNavigation)
-                case .genres:
-                    GenreView(showingSearch: $showingSearch, musicService: musicService, playerService: playerService, cacheService: cacheService)
-                case .songs:
-                    SongsView(showingSearch: $showingSearch, musicService: musicService, playerService: playerService, cacheService: cacheService)
-                case .playlists:
-                    PlaylistView(showingSearch: $showingSearch, musicService: musicService, playerService: playerService, cacheService: cacheService)
-                case .search:
-                    SearchView(musicService: musicService, playerService: playerService, cacheService: cacheService)
-                case .settings:
-                    SettingsView(showingSearch: $showingSearch, cacheService: cacheService ?? CacheService(modelContext: modelContext), musicService: musicService)
+                if musicService.isLoading {
+                    ProgressView("Loading catalog...")
+                } else {
+                    switch selectedTab {
+                    case .artists:
+                        if musicService.isEmpty {
+                            emptyStateView
+                        } else {
+                            ArtistsView(showingSearch: $showingSearch, musicService: musicService, playerService: playerService, cacheService: cacheService, pendingNavigation: $pendingNavigation)
+                        }
+                    case .genres:
+                        if musicService.isEmpty {
+                            emptyStateView
+                        } else {
+                            GenreView(showingSearch: $showingSearch, musicService: musicService, playerService: playerService, cacheService: cacheService)
+                        }
+                    case .songs:
+                        if musicService.isEmpty {
+                            emptyStateView
+                        } else {
+                            SongsView(showingSearch: $showingSearch, musicService: musicService, playerService: playerService, cacheService: cacheService)
+                        }
+                    case .playlists:
+                        if musicService.isEmpty {
+                            emptyStateView
+                        } else {
+                            PlaylistView(showingSearch: $showingSearch, musicService: musicService, playerService: playerService, cacheService: cacheService)
+                        }
+                    case .search:
+                        SearchView(musicService: musicService, playerService: playerService, cacheService: cacheService)
+                    case .upload:
+                        UploadView()
+                    case .settings:
+                        SettingsView(showingSearch: $showingSearch, cacheService: cacheService ?? CacheService(modelContext: modelContext), musicService: musicService)
+                    }
                 }
             }
             .onChange(of: showingSearch) { _, newValue in
@@ -156,7 +189,6 @@ struct ContentView: View {
                     .frame(minWidth: 400, minHeight: 600)
             }
             #endif
-            }
         }
         .task {
             if cacheService == nil {
@@ -165,8 +197,6 @@ struct ContentView: View {
             }
             musicService.configure(modelContext: modelContext)
             await musicService.loadCatalog()
-            // Sync initial online status
-            playerService.isOnline = !musicService.isOffline
             // Restore playback state after catalog loads
             if musicService.catalog != nil {
                 playerService.restorePlaybackState(from: musicService)
@@ -176,9 +206,6 @@ struct ContentView: View {
             if newPhase == .background {
                 playerService.savePlaybackState()
             }
-        }
-        .onChange(of: musicService.isOffline) { _, isOffline in
-            playerService.isOnline = !isOffline
         }
         .alert("Unable to Load Music", isPresented: .constant(musicService.error != nil)) {
             Button("Retry") {
@@ -196,5 +223,5 @@ struct ContentView: View {
 
 #Preview {
     ContentView()
-        .modelContainer(for: [Item.self, CachedTrack.self, CachedArtwork.self, CachedCatalog.self], inMemory: true)
+        .modelContainer(for: [Item.self, CachedTrack.self, CachedArtwork.self], inMemory: true)
 }

@@ -2,6 +2,8 @@
 //  CacheModels.swift
 //  Music
 //
+//  SwiftData models for caching downloaded tracks and artwork locally.
+//
 
 import Foundation
 import SwiftData
@@ -34,22 +36,8 @@ class CachedArtwork {
     }
 }
 
-@Model
-class CachedCatalog {
-    @Attribute(.unique) var id: String
-    var catalogData: Data
-    var cachedAt: Date
-    var totalTracks: Int
-    var generatedAt: String
+// Note: CachedCatalog removed - catalog now comes exclusively from SwiftData
+// (populated by macOS upload feature, synced via CloudKit)
 
-    init(id: String = "main", catalogData: Data, totalTracks: Int, generatedAt: String, cachedAt: Date = Date()) {
-        self.id = id
-        self.catalogData = catalogData
-        self.totalTracks = totalTracks
-        self.generatedAt = generatedAt
-        self.cachedAt = cachedAt
-    }
-}
-
-// Note: PlayEvent and SkipEvent analytics are now in Core Data + CloudKit
+// Note: PlayEvent and SkipEvent analytics are in Core Data + CloudKit
 // See AnalyticsStore.swift and MusicDB.xcdatamodeld

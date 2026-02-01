@@ -35,22 +35,30 @@ class AnalyticsStore {
     let container: NSPersistentCloudKitContainer
     var viewContext: NSManagedObjectContext { container.viewContext }
 
+    /// Indicates if analytics is available (Core Data loaded successfully)
+    private(set) var isAvailable = false
+
     private init() {
         container = NSPersistentCloudKitContainer(name: "MusicDB")
 
-        // Configure for CloudKit
-        guard let description = container.persistentStoreDescriptions.first else {
-            fatalError("No store description found")
+        // Configure for CloudKit (gracefully handle missing store description)
+        if let description = container.persistentStoreDescriptions.first {
+            description.cloudKitContainerOptions = NSPersistentCloudKitContainerOptions(
+                containerIdentifier: "iCloud.com.terrillo.Music"
+            )
+        } else {
+            print("⚠️ No store description found - analytics will be disabled")
         }
-        description.cloudKitContainerOptions = NSPersistentCloudKitContainerOptions(
-            containerIdentifier: "iCloud.com.terrillo.Music"
-        )
 
-        container.loadPersistentStores { description, error in
+        container.loadPersistentStores { [weak self] description, error in
             if let error = error {
                 print("❌ Core Data error: \(error)")
+                // Analytics disabled but app continues to function
             } else {
                 print("✅ Core Data + CloudKit loaded successfully")
+                Task { @MainActor in
+                    self?.isAvailable = true
+                }
             }
         }
 
@@ -61,6 +69,7 @@ class AnalyticsStore {
     // MARK: - Record Events
 
     func recordPlay(track: Track, duration: TimeInterval, trackDuration: TimeInterval? = nil) {
+        guard isAvailable else { return }
         let event = PlayEventEntity(context: viewContext)
         event.trackS3Key = track.s3Key
         event.trackTitle = track.title
@@ -83,6 +92,7 @@ class AnalyticsStore {
     }
 
     func recordSkip(track: Track, playedDuration: TimeInterval) {
+        guard isAvailable else { return }
         let event = SkipEventEntity(context: viewContext)
         event.trackS3Key = track.s3Key
         event.trackTitle = track.title

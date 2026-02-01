@@ -2,6 +2,8 @@
 //  MusicService.swift
 //  Music
 //
+//  Loads catalog exclusively from SwiftData (populated by macOS upload feature).
+//
 
 import Foundation
 import SwiftData
@@ -11,17 +13,20 @@ import SwiftData
 class MusicService {
     private(set) var catalog: MusicCatalog?
     private(set) var isLoading = false
-    var error: Error?  // Settable to allow clearing from UI
-    private(set) var isOffline = false
+    var error: Error?
     private(set) var lastUpdated: Date?
 
     private var modelContext: ModelContext?
-    private let catalogBaseURL = "https://terrillo.sfo3.cdn.digitaloceanspaces.com/music/music_catalog.json"
 
     // Cached computed properties for performance with large catalogs
     private var _cachedSongs: [Track]?
     private var _cachedAlbums: [Album]?
     private var _cachedArtists: [Artist]?
+
+    /// Whether the catalog is empty (no music uploaded yet)
+    var isEmpty: Bool {
+        catalog?.artists.isEmpty ?? true
+    }
 
     var artists: [Artist] {
         if let cached = _cachedArtists { return cached }
@@ -103,95 +108,44 @@ class MusicService {
 
         isLoading = true
         error = nil
-        isOffline = false
         invalidateCaches()
 
-        // Add timestamp cache breaker to bypass CDN cache
-        let timestamp = Int(Date().timeIntervalSince1970)
-        guard let catalogURL = URL(string: "\(catalogBaseURL)?\(timestamp)") else {
-            self.error = URLError(.badURL)
-            isLoading = false
-            return
-        }
-
-        do {
-            let (data, _) = try await URLSession.shared.data(from: catalogURL)
-            let decoder = JSONDecoder()
-            let fetchedCatalog = try decoder.decode(MusicCatalog.self, from: data)
-            catalog = fetchedCatalog
-            lastUpdated = Date()
-
-            // Save to cache
-            await saveCatalogToCache(data: data, catalog: fetchedCatalog)
-        } catch {
-            // Check if this is actually a network unavailability error
-            let isNetworkUnavailable: Bool
-            if let urlError = error as? URLError {
-                isNetworkUnavailable = [
-                    .notConnectedToInternet,
-                    .networkConnectionLost,
-                    .dataNotAllowed,
-                    .internationalRoamingOff
-                ].contains(urlError.code)
-            } else {
-                isNetworkUnavailable = false
-            }
-
-            // Only fall back to cache and show offline mode for actual network unavailability
-            if isNetworkUnavailable {
-                if let cachedCatalog = await loadCatalogFromCache() {
-                    catalog = cachedCatalog
-                    isOffline = true
-                } else {
-                    self.error = error
-                    print("Failed to load catalog (offline, no cache): \(error)")
-                }
-            } else {
-                // Other errors (server errors, decoding errors, etc.) - keep existing catalog if available
-                if catalog == nil {
-                    if let cachedCatalog = await loadCatalogFromCache() {
-                        catalog = cachedCatalog
-                    } else {
-                        self.error = error
-                    }
-                }
-                print("Failed to refresh catalog: \(error)")
-            }
-        }
+        // Load exclusively from SwiftData
+        await loadFromSwiftData()
 
         isLoading = false
     }
 
-    private func saveCatalogToCache(data: Data, catalog: MusicCatalog) async {
-        guard let modelContext else { return }
-
-        // Delete existing cached catalog
-        let descriptor = FetchDescriptor<CachedCatalog>(
-            predicate: #Predicate { $0.id == "main" }
-        )
-        if let existing = try? modelContext.fetch(descriptor).first {
-            modelContext.delete(existing)
+    /// Load catalog from SwiftData (populated by macOS upload, synced via CloudKit)
+    private func loadFromSwiftData() async {
+        guard let modelContext else {
+            // No model context - catalog will be empty
+            catalog = MusicCatalog(artists: [], totalTracks: 0, generatedAt: Date().ISO8601Format())
+            return
         }
 
-        let cached = CachedCatalog(
-            catalogData: data,
-            totalTracks: catalog.totalTracks,
-            generatedAt: catalog.generatedAt
-        )
-        modelContext.insert(cached)
-        try? modelContext.save()
-    }
+        let descriptor = FetchDescriptor<CatalogArtist>()
+        guard let catalogArtists = try? modelContext.fetch(descriptor), !catalogArtists.isEmpty else {
+            // No catalog data yet - this is expected on fresh install
+            catalog = MusicCatalog(artists: [], totalTracks: 0, generatedAt: Date().ISO8601Format())
+            return
+        }
 
-    private func loadCatalogFromCache() async -> MusicCatalog? {
-        guard let modelContext else { return nil }
-
-        let descriptor = FetchDescriptor<CachedCatalog>(
+        // Get catalog metadata
+        let metadataDescriptor = FetchDescriptor<CatalogMetadata>(
             predicate: #Predicate { $0.id == "main" }
         )
-        guard let cached = try? modelContext.fetch(descriptor).first else { return nil }
+        let metadata = try? modelContext.fetch(metadataDescriptor).first
 
-        let decoder = JSONDecoder()
-        lastUpdated = cached.cachedAt
-        return try? decoder.decode(MusicCatalog.self, from: cached.catalogData)
+        // Convert SwiftData models to existing Codable models
+        let artists = catalogArtists
+            .map { $0.toArtist() }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+
+        let totalTracks = metadata?.totalTracks ?? artists.flatMap { $0.albums.flatMap { $0.tracks } }.count
+        let generatedAt = metadata?.generatedAt.ISO8601Format() ?? Date().ISO8601Format()
+
+        catalog = MusicCatalog(artists: artists, totalTracks: totalTracks, generatedAt: generatedAt)
+        lastUpdated = metadata?.updatedAt ?? Date()
     }
 }
