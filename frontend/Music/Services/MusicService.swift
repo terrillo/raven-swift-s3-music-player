@@ -104,7 +104,7 @@ class MusicService {
         self.modelContext = modelContext
     }
 
-    private func invalidateCaches() {
+    func invalidateCaches() {
         _cachedSongs = nil
         _cachedAlbums = nil
         _cachedArtists = nil

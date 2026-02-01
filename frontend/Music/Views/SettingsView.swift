@@ -70,6 +70,21 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    Button {
+                        Task {
+                            await musicService.loadCatalog(forceRefresh: true)
+                        }
+                    } label: {
+                        HStack {
+                            Label("Sync Catalog", systemImage: "arrow.triangle.2.circlepath")
+                            Spacer()
+                            if musicService.isLoading {
+                                ProgressView()
+                            }
+                        }
+                    }
+                    .disabled(musicService.isLoading)
+
                     HStack {
                         Label("CDN Prefix", systemImage: "cloud")
                         Spacer()

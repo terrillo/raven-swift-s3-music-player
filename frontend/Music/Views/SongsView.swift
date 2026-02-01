@@ -82,9 +82,6 @@ struct SongsView: View {
                     }
                 }
             }
-            .refreshable {
-                await musicService.loadCatalog(forceRefresh: true)
-            }
         }
     }
 }

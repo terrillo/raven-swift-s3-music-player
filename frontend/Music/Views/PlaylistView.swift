@@ -341,7 +341,7 @@ struct Top100View: View {
                     }
                 }
                 .refreshable {
-                    await musicService.loadCatalog(forceRefresh: true)
+                    musicService.invalidateCaches()
                 }
             }
         }
@@ -349,13 +349,11 @@ struct Top100View: View {
         .toolbar {
             ToolbarItem(placement: .automatic) {
                 Button {
-                    Task {
-                        await musicService.loadCatalog(forceRefresh: true)
-                    }
+                    musicService.invalidateCaches()
                 } label: {
                     Image(systemName: "arrow.clockwise")
                 }
-                .help("Refresh catalog")
+                .help("Refresh stats")
             }
         }
     }
