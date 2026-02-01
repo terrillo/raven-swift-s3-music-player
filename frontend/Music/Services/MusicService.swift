@@ -17,6 +17,7 @@ class MusicService {
     private(set) var lastUpdated: Date?
 
     private var modelContext: ModelContext?
+    private var loadCatalogTask: Task<Void, Never>?
 
     // CDN settings (synced via iCloud Key-Value storage)
     static let defaultCDNBase = "https://terrillo.sfo3.cdn.digitaloceanspaces.com"
@@ -40,6 +41,8 @@ class MusicService {
     private var _cachedSongs: [Track]?
     private var _cachedAlbums: [Album]?
     private var _cachedArtists: [Artist]?
+    private var _artistByName: [String: Artist]?
+    private var _trackByS3Key: [String: Track]?
 
     /// Whether the catalog is empty (no music uploaded yet)
     var isEmpty: Bool {
@@ -58,12 +61,12 @@ class MusicService {
         }
 
         // Consolidate each group into a single artist
-        let consolidated = grouped.map { (primaryName, artists) -> Artist in
+        let consolidated = grouped.compactMap { (primaryName, artists) -> Artist? in
             // Combine albums from all matching artists
             let allAlbums = artists.flatMap { $0.albums }
 
             // Use metadata from first artist that has each field
-            let base = artists.first!
+            guard let base = artists.first else { return nil }
             return Artist(
                 name: primaryName,
                 imageUrl: artists.compactMap(\.imageUrl).first ?? allAlbums.compactMap(\.imageUrl).first,
@@ -100,6 +103,22 @@ class MusicService {
         return sorted
     }
 
+    /// O(1) lookup for artists by name
+    var artistByName: [String: Artist] {
+        if let cached = _artistByName { return cached }
+        let map = Dictionary(uniqueKeysWithValues: artists.map { ($0.name, $0) })
+        _artistByName = map
+        return map
+    }
+
+    /// O(1) lookup for tracks by s3Key
+    var trackByS3Key: [String: Track] {
+        if let cached = _trackByS3Key { return cached }
+        let map = Dictionary(uniqueKeysWithValues: songs.map { ($0.s3Key, $0) })
+        _trackByS3Key = map
+        return map
+    }
+
     func configure(modelContext: ModelContext) {
         self.modelContext = modelContext
     }
@@ -108,6 +127,8 @@ class MusicService {
         _cachedSongs = nil
         _cachedAlbums = nil
         _cachedArtists = nil
+        _artistByName = nil
+        _trackByS3Key = nil
     }
 
     private func primaryArtistName(_ name: String) -> String {
@@ -122,6 +143,17 @@ class MusicService {
     }
 
     func loadCatalog(forceRefresh: Bool = false) async {
+        // Cancel any existing load task
+        loadCatalogTask?.cancel()
+
+        loadCatalogTask = Task {
+            await performLoadCatalog(forceRefresh: forceRefresh)
+        }
+
+        await loadCatalogTask?.value
+    }
+
+    private func performLoadCatalog(forceRefresh: Bool) async {
         guard !isLoading else { return }
 
         isLoading = true

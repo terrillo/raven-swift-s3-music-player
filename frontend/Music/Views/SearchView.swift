@@ -8,14 +8,16 @@ import SwiftUI
 struct SearchView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var searchText = ""
+    @State private var debouncedSearchText = ""
+    @State private var searchTask: Task<Void, Never>?
 
     var musicService: MusicService
     var playerService: PlayerService
     var cacheService: CacheService?
 
     private var filteredArtists: [Artist] {
-        guard !searchText.isEmpty else { return [] }
-        let query = searchText.lowercased()
+        guard !debouncedSearchText.isEmpty else { return [] }
+        let query = debouncedSearchText.lowercased()
         let favorites = FavoritesStore.shared.favoriteArtistIds
         var seenIds = Set<String>()
         return musicService.artists
@@ -36,8 +38,8 @@ struct SearchView: View {
     }
 
     private var filteredAlbums: [Album] {
-        guard !searchText.isEmpty else { return [] }
-        let query = searchText.lowercased()
+        guard !debouncedSearchText.isEmpty else { return [] }
+        let query = debouncedSearchText.lowercased()
         let favorites = FavoritesStore.shared.favoriteAlbumIds
         var seenIds = Set<String>()
         return musicService.albums
@@ -58,8 +60,8 @@ struct SearchView: View {
     }
 
     private var filteredSongs: [Track] {
-        guard !searchText.isEmpty else { return [] }
-        let query = searchText.lowercased()
+        guard !debouncedSearchText.isEmpty else { return [] }
+        let query = debouncedSearchText.lowercased()
         let favorites = FavoritesStore.shared.favoriteTrackKeys
         var seenIds = Set<String>()
         return musicService.songs
@@ -81,7 +83,16 @@ struct SearchView: View {
     }
 
     private var hasNoResults: Bool {
-        !searchText.isEmpty && filteredArtists.isEmpty && filteredAlbums.isEmpty && filteredSongs.isEmpty
+        !debouncedSearchText.isEmpty && filteredArtists.isEmpty && filteredAlbums.isEmpty && filteredSongs.isEmpty
+    }
+
+    private func updateDebouncedSearch(_ newValue: String) {
+        searchTask?.cancel()
+        searchTask = Task {
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled else { return }
+            debouncedSearchText = newValue
+        }
     }
 
     var body: some View {
@@ -97,6 +108,9 @@ struct SearchView: View {
         NavigationStack {
             searchList
                 .searchable(text: $searchText, prompt: "Artists, Albums, Songs")
+                .onChange(of: searchText) { _, newValue in
+                    updateDebouncedSearch(newValue)
+                }
                 .navigationBarTitleDisplayMode(.inline)
                 .navigationTitle("Search")
                 .toolbar {
@@ -118,6 +132,9 @@ struct SearchView: View {
                     .foregroundStyle(.secondary)
                 TextField("Artists, Albums, Songs", text: $searchText)
                     .textFieldStyle(.roundedBorder)
+                    .onChange(of: searchText) { _, newValue in
+                        updateDebouncedSearch(newValue)
+                    }
                 if !searchText.isEmpty {
                     Button {
                         searchText = ""

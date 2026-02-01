@@ -76,10 +76,10 @@ actor CatalogBuilder {
             if artistAlbums[artistKey] == nil {
                 artistAlbums[artistKey] = [:]
             }
-            if artistAlbums[artistKey]![track.album] == nil {
-                artistAlbums[artistKey]![track.album] = []
+            if artistAlbums[artistKey]?[track.album] == nil {
+                artistAlbums[artistKey]?[track.album] = []
             }
-            artistAlbums[artistKey]![track.album]!.append(track)
+            artistAlbums[artistKey]?[track.album]?.append(track)
         }
 
         // Build catalog structure
@@ -88,7 +88,7 @@ actor CatalogBuilder {
 
         for artistKey in sortedArtistKeys {
             let displayName = artistDisplayNames[artistKey] ?? artistKey
-            let albums = artistAlbums[artistKey]!
+            guard let albums = artistAlbums[artistKey] else { continue }
             let artist = await buildArtist(name: displayName, albumsDict: albums)
             catalogArtists.append(artist)
         }
@@ -111,7 +111,7 @@ actor CatalogBuilder {
         // Build albums
         var catalogAlbums: [CatalogAlbum] = []
         for albumName in albumsDict.keys.sorted() {
-            let albumTracks = albumsDict[albumName]!
+            guard let albumTracks = albumsDict[albumName] else { continue }
             let album = await buildAlbum(
                 artistName: name,
                 albumName: albumName,

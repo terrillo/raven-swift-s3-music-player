@@ -213,7 +213,7 @@ class PlayerService {
         let playerItem = AVPlayerItem(url: url)
 
         // Optimize for streaming: reduce buffer requirements for faster startup
-        let isStreaming = cacheService?.isTrackCached(currentTrack!) == false
+        let isStreaming = currentTrack.map { cacheService?.isTrackCached($0) == false } ?? false
         if isStreaming {
             playerItem.preferredForwardBufferDuration = 5 // Only buffer 5 seconds ahead
         }
@@ -369,7 +369,9 @@ class PlayerService {
         }
 
         currentTrack = queue[currentIndex]
-        updateSessionTracking(for: currentTrack!)
+        if let track = currentTrack {
+            updateSessionTracking(for: track)
+        }
         setupPlayer()
     }
 
@@ -414,7 +416,9 @@ class PlayerService {
         currentIndex = prevIndex
 
         currentTrack = queue[currentIndex]
-        updateSessionTracking(for: currentTrack!)
+        if let track = currentTrack {
+            updateSessionTracking(for: track)
+        }
         setupPlayer()
     }
 
@@ -764,8 +768,21 @@ class PlayerService {
         PlaybackState.clear()
     }
 
-    nonisolated func cleanup() {
-        // Called when the service is being deallocated
-        // Player will be cleaned up automatically
+    func cleanup() {
+        // Cancel any pending pre-cache operations
+        preCacheTask?.cancel()
+        preCacheTask = nil
+
+        // Remove time observer and playback end observer
+        removeTimeObserver()
+
+        // Stop and release player
+        player?.pause()
+        player = nil
+
+        // Clear playback state
+        isPlaying = false
+        currentTime = 0
+        duration = 0
     }
 }

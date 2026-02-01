@@ -70,7 +70,9 @@ actor StorageService {
             queryItems.append(URLQueryItem(name: "continuation-token", value: token))
         }
 
-        var components = URLComponents(string: config.spacesEndpoint)!
+        guard var components = URLComponents(string: config.spacesEndpoint) else {
+            throw StorageError.invalidURL
+        }
         components.path = "/"  // Virtual-hosted style: bucket is in hostname, not path
         components.queryItems = queryItems
 

@@ -287,14 +287,14 @@ struct Top100View: View {
         // Fetch top tracks from Core Data + CloudKit with time filtering
         let topTrackData = AnalyticsStore.shared.fetchTopTracks(limit: 100, period: selectedPeriod)
 
+        // Use O(1) lookup dictionary instead of O(n) search
+        let trackLookup = musicService.trackByS3Key
+
         // Match to actual Track objects
-        var results: [(track: Track, playCount: Int)] = []
-        for (s3Key, count) in topTrackData {
-            if let track = musicService.songs.first(where: { $0.s3Key == s3Key }) {
-                results.append((track: track, playCount: count))
-            }
+        return topTrackData.compactMap { (s3Key, count) in
+            guard let track = trackLookup[s3Key] else { return nil }
+            return (track: track, playCount: count)
         }
-        return results
     }
 
     var body: some View {

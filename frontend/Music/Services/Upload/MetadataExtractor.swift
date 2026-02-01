@@ -52,7 +52,9 @@ actor MetadataExtractor {
     // MARK: - Cache Management
 
     private static var cacheFileURL: URL {
-        let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        guard let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else {
+            return URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(cacheFileName)
+        }
         return cacheDir.appendingPathComponent(cacheFileName)
     }
 
@@ -249,7 +251,8 @@ actor MetadataExtractor {
 
         if value.contains("/") {
             let parts = value.components(separatedBy: "/")
-            let num = Int(parts[0].trimmingCharacters(in: CharacterSet.whitespaces))
+            guard let first = parts.first else { return (nil, nil) }
+            let num = Int(first.trimmingCharacters(in: CharacterSet.whitespaces))
             let total = parts.count > 1 ? Int(parts[1].trimmingCharacters(in: CharacterSet.whitespaces)) : nil
             return (num, total)
         }
@@ -275,10 +278,10 @@ actor MetadataExtractor {
         let relativePath = fileURL.path.replacingOccurrences(of: musicDirectory.path + "/", with: "")
         let parts = relativePath.components(separatedBy: "/")
         if parts.count >= 3 {
-            if result.artist == nil {
-                result.artist = parts[0]
+            if result.artist == nil, let artistPart = parts.first {
+                result.artist = artistPart
             }
-            if result.album == nil {
+            if result.album == nil, parts.count >= 2 {
                 result.album = parts[1]
             }
         }

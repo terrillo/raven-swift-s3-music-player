@@ -14,7 +14,6 @@ struct MusicApp: App {
     // Catalog syncs via catalog.json on CDN (not CloudKit)
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
-            Item.self,
             CachedTrack.self,
             CachedArtwork.self,
             CatalogArtist.self,

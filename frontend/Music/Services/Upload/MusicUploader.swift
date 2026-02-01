@@ -240,8 +240,8 @@ class MusicUploader {
         for albumKey in uniqueAlbums {
             try Task.checkCancellation()
             let parts = albumKey.split(separator: "|", maxSplits: 1)
-            guard parts.count == 2 else { continue }
-            let rawArtist = String(parts[0])
+            guard parts.count == 2, let firstPart = parts.first else { continue }
+            let rawArtist = String(firstPart)
             let rawAlbum = String(parts[1])
 
             let correctedArtist = artistCorrections[rawArtist] ?? rawArtist

@@ -10,6 +10,12 @@ import UIKit
 import AppKit
 #endif
 
+#if os(iOS)
+typealias PlatformImage = UIImage
+#else
+typealias PlatformImage = NSImage
+#endif
+
 struct ArtworkImage: View {
     let url: String?
     let size: CGFloat
@@ -20,62 +26,102 @@ struct ArtworkImage: View {
 
     @State private var cachedLocalURL: URL? = nil
     @State private var hasTriggeredDownload = false
+    @State private var loadedImage: PlatformImage? = nil
+    @State private var isLoading = false
 
     private var clipShape: AnyShape {
         isCircular ? AnyShape(Circle()) : AnyShape(RoundedRectangle(cornerRadius: 8))
     }
 
+    private var effectiveURL: URL? {
+        localURL ?? cachedLocalURL
+    }
+
     var body: some View {
         Group {
-            if let localURL = localURL ?? cachedLocalURL, let platformImage = loadLocalImage(from: localURL) {
-                #if os(iOS)
-                Image(uiImage: platformImage)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
+            if let image = loadedImage {
+                imageView(for: image)
+                    .transition(.opacity)
+            } else if isLoading {
+                ProgressView()
                     .frame(width: size, height: size)
-                    .clipShape(clipShape)
-                #else
-                Image(nsImage: platformImage)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(width: size, height: size)
-                    .clipShape(clipShape)
-                #endif
+            } else if let urlString = url, cacheService != nil {
+                placeholderView
+                    .onAppear {
+                        triggerCacheDownload(urlString: urlString)
+                    }
             } else if let urlString = url, let imageUrl = URL(string: urlString) {
-                if let cacheService = cacheService {
-                    // Cache service available - trigger download and show placeholder
-                    placeholderView
-                        .onAppear {
-                            triggerCacheDownload(urlString: urlString, cacheService: cacheService)
-                        }
-                } else {
-                    // No cache service - use AsyncImage directly
-                    AsyncImage(url: imageUrl) { phase in
-                        switch phase {
-                        case .empty:
-                            ProgressView()
-                                .frame(width: size, height: size)
-                        case .success(let image):
-                            image
-                                .resizable()
-                                .aspectRatio(contentMode: .fill)
-                                .frame(width: size, height: size)
-                                .clipShape(clipShape)
-                        case .failure:
-                            placeholderView
-                        @unknown default:
-                            placeholderView
-                        }
+                AsyncImage(url: imageUrl) { phase in
+                    switch phase {
+                    case .empty:
+                        ProgressView()
+                            .frame(width: size, height: size)
+                    case .success(let image):
+                        image
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(width: size, height: size)
+                            .clipShape(clipShape)
+                    case .failure:
+                        placeholderView
+                    @unknown default:
+                        placeholderView
                     }
                 }
             } else {
                 placeholderView
             }
         }
+        .task(id: effectiveURL) {
+            await loadImageAsync()
+        }
+        .animation(.easeInOut(duration: 0.2), value: loadedImage != nil)
     }
 
-    private func triggerCacheDownload(urlString: String, cacheService: CacheService) {
-        guard !hasTriggeredDownload else { return }
+    private func loadImageAsync() async {
+        guard let url = effectiveURL else {
+            loadedImage = nil
+            return
+        }
+
+        isLoading = true
+        defer { isLoading = false }
+
+        // Load off main thread
+        let image = await Task.detached(priority: .userInitiated) {
+            guard let data = try? Data(contentsOf: url) else { return nil as PlatformImage? }
+            #if os(iOS)
+            return UIImage(data: data)
+            #else
+            return NSImage(data: data)
+            #endif
+        }.value
+
+        await MainActor.run {
+            loadedImage = image
+        }
+    }
+
+    #if os(iOS)
+    private func imageView(for image: UIImage) -> some View {
+        Image(uiImage: image)
+            .resizable()
+            .aspectRatio(contentMode: .fill)
+            .frame(width: size, height: size)
+            .clipShape(clipShape)
+    }
+    #else
+    private func imageView(for image: NSImage) -> some View {
+        Image(nsImage: image)
+            .resizable()
+            .aspectRatio(contentMode: .fill)
+            .frame(width: size, height: size)
+            .clipShape(clipShape)
+    }
+    #endif
+
+    private func triggerCacheDownload(urlString: String) {
+        guard !hasTriggeredDownload, let cacheService = cacheService else { return }
         hasTriggeredDownload = true
 
         cacheService.cacheArtworkIfNeeded(urlString) { localURL in
@@ -95,18 +141,6 @@ struct ArtworkImage: View {
             .clipShape(clipShape)
             .shadow(radius: 20)
     }
-
-    #if os(iOS)
-    private func loadLocalImage(from url: URL) -> UIImage? {
-        guard let data = try? Data(contentsOf: url) else { return nil }
-        return UIImage(data: data)
-    }
-    #else
-    private func loadLocalImage(from url: URL) -> NSImage? {
-        guard let data = try? Data(contentsOf: url) else { return nil }
-        return NSImage(data: data)
-    }
-    #endif
 }
 
 struct ArtistGridCard: View {

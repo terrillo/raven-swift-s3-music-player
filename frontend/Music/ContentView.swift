@@ -238,5 +238,5 @@ struct ContentView: View {
 
 #Preview {
     ContentView()
-        .modelContainer(for: [Item.self, CachedTrack.self, CachedArtwork.self], inMemory: true)
+        .modelContainer(for: [CachedTrack.self, CachedArtwork.self], inMemory: true)
 }

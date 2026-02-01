@@ -56,7 +56,7 @@ actor LastFMService {
         allParams["api_key"] = apiKey
         allParams["format"] = "json"
 
-        var components = URLComponents(string: Self.baseURL)!
+        guard var components = URLComponents(string: Self.baseURL) else { return nil }
         components.queryItems = allParams.map { URLQueryItem(name: $0.key, value: $0.value) }
 
         guard let url = components.url else { return nil }

@@ -56,7 +56,9 @@ class CacheService {
     // MARK: - Directory Management
 
     private var cacheDirectory: URL {
-        let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        guard let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
+            return URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("MusicCache")
+        }
         return documentsPath.appendingPathComponent("MusicCache", isDirectory: true)
     }
 
@@ -111,6 +113,10 @@ class CacheService {
     }
 
     func localURL(for track: Track) -> URL? {
+        // Fast path: check in-memory cache first to avoid DB query
+        guard cachedTrackKeys.contains(track.s3Key) else { return nil }
+
+        // Only query DB if we know it's cached
         let descriptor = FetchDescriptor<CachedTrack>(
             predicate: #Predicate { $0.s3Key == track.s3Key }
         )
@@ -473,8 +479,16 @@ class CacheService {
 
     // MARK: - Cancel
 
+    /// Track active download tasks for cancellation
+    private var activeDownloadTasks: [String: URLSessionDataTask] = [:]
+
     func cancelDownload() {
         isCancelled = true
+        // Cancel all active URLSession tasks
+        for (_, task) in activeDownloadTasks {
+            task.cancel()
+        }
+        activeDownloadTasks.removeAll()
     }
 
     // MARK: - Clear Cache

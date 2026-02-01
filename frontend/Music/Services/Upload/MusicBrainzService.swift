@@ -78,7 +78,7 @@ actor MusicBrainzService {
 
         await rateLimit()
 
-        var components = URLComponents(string: "\(Self.baseURL)/\(endpoint)")!
+        guard var components = URLComponents(string: "\(Self.baseURL)/\(endpoint)") else { return nil }
         var queryItems = params.map { URLQueryItem(name: $0.key, value: $0.value) }
         queryItems.append(URLQueryItem(name: "fmt", value: "json"))
         components.queryItems = queryItems

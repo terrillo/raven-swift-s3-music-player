@@ -80,7 +80,7 @@ actor TheAudioDBService {
     private func makeRequest(_ endpoint: String, params: [String: String] = [:]) async -> [String: Any]? {
         await rateLimit()
 
-        var components = URLComponents(string: "\(Self.baseURL)/\(endpoint)")!
+        guard var components = URLComponents(string: "\(Self.baseURL)/\(endpoint)") else { return nil }
         if !params.isEmpty {
             components.queryItems = params.map { URLQueryItem(name: $0.key, value: $0.value) }
         }
