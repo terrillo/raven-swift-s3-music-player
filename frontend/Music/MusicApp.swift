@@ -10,15 +10,13 @@ import SwiftData
 
 @main
 struct MusicApp: App {
-    // Single local container for all SwiftData models
-    // Note: CloudKit sync for catalog can be enabled later via separate container
+    // Local SwiftData container for all models
+    // Catalog syncs via catalog.json on CDN (not CloudKit)
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
-            // Cache models (device-specific, for offline playback)
             Item.self,
             CachedTrack.self,
             CachedArtwork.self,
-            // Catalog models (populated by macOS upload feature)
             CatalogArtist.self,
             CatalogAlbum.self,
             CatalogTrack.self,
@@ -28,13 +26,12 @@ struct MusicApp: App {
         let config = ModelConfiguration(
             schema: schema,
             isStoredInMemoryOnly: false,
-            cloudKitDatabase: .none  // Local-only for reliability
+            cloudKitDatabase: .none  // Local only - catalog syncs via CDN
         )
 
         do {
             return try ModelContainer(for: schema, configurations: [config])
         } catch {
-            // Log error and attempt recovery with in-memory fallback
             print("❌ Failed to create persistent ModelContainer: \(error)")
             print("⚠️ Falling back to in-memory storage")
 

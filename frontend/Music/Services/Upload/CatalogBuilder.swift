@@ -140,7 +140,8 @@ actor CatalogBuilder {
         // Link albums to artist
         for album in catalogAlbums {
             album.artist = artist
-            artist.albums.append(album)
+            if artist.albums == nil { artist.albums = [] }
+            artist.albums?.append(album)
         }
 
         return artist
@@ -288,7 +289,8 @@ actor CatalogBuilder {
         // Link tracks to album
         for track in catalogTracks {
             track.catalogAlbum = album
-            album.tracks.append(track)
+            if album.tracks == nil { album.tracks = [] }
+            album.tracks?.append(track)
         }
 
         return album

@@ -457,9 +457,9 @@ class MusicUploader {
 
         try Task.checkCancellation()
 
-        // Phase: Save to SwiftData
+        // Phase: Save to SwiftData and upload catalog.json to CDN
         progress.phase = .savingCatalog
-        try await saveCatalog(artists: catalogArtists, totalTracks: totalTracks)
+        try await saveCatalog(artists: catalogArtists, totalTracks: totalTracks, storageService: storageService, config: config)
     }
 
     /// Process a single file using pre-computed preview data
@@ -652,9 +652,9 @@ class MusicUploader {
 
         try Task.checkCancellation()
 
-        // Phase 5: Save to SwiftData
+        // Phase 5: Save to SwiftData and upload catalog.json to CDN
         progress.phase = .savingCatalog
-        try await saveCatalog(artists: catalogArtists, totalTracks: totalTracks)
+        try await saveCatalog(artists: catalogArtists, totalTracks: totalTracks, storageService: storageService, config: config)
     }
 
     // MARK: - Scan for Audio Files
@@ -824,9 +824,9 @@ class MusicUploader {
         }
     }
 
-    // MARK: - Save Catalog to SwiftData
+    // MARK: - Save Catalog to SwiftData and CDN
 
-    private func saveCatalog(artists: [CatalogArtist], totalTracks: Int) async throws {
+    private func saveCatalog(artists: [CatalogArtist], totalTracks: Int, storageService: StorageService, config: UploadConfiguration) async throws {
         guard let modelContext = modelContext else {
             throw UploaderError.noModelContext
         }
@@ -847,6 +847,32 @@ class MusicUploader {
         modelContext.insert(metadata)
 
         try modelContext.save()
+
+        // Upload catalog.json to CDN for cross-device sync
+        let codableArtists = artists.map { $0.toArtist() }
+        let catalog = MusicCatalog(
+            artists: codableArtists,
+            totalTracks: totalTracks,
+            generatedAt: Date().ISO8601Format()
+        )
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let catalogData = try encoder.encode(catalog)
+
+        _ = try await storageService.forceUploadData(
+            catalogData,
+            s3Key: "catalog.json",
+            contentType: "application/json"
+        )
+        print("✅ Uploaded catalog.json to CDN")
+
+        // Save CDN settings to iCloud for iOS to discover
+        let store = NSUbiquitousKeyValueStore.default
+        store.set(config.cdnBaseURL.replacingOccurrences(of: "/\(config.spacesPrefix)", with: ""), forKey: "cdnBaseURL")
+        store.set(config.spacesPrefix, forKey: "cdnPrefix")
+        store.synchronize()
+        print("✅ Saved CDN settings to iCloud (prefix: \(config.spacesPrefix))")
     }
 }
 

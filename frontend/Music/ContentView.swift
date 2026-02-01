@@ -56,6 +56,14 @@ struct ContentView: View {
             Text("Use the macOS app to upload your music library.")
             #endif
         } actions: {
+            Button {
+                Task {
+                    await musicService.loadCatalog()
+                }
+            } label: {
+                Label("Refresh", systemImage: "arrow.clockwise")
+            }
+
             #if os(macOS)
             Button("Go to Upload") {
                 selectedTab = .upload
@@ -191,6 +199,9 @@ struct ContentView: View {
             #endif
         }
         .task {
+            // Sync iCloud settings (CDN prefix from macOS)
+            MusicService.syncCloudSettings()
+
             if cacheService == nil {
                 cacheService = CacheService(modelContext: modelContext)
                 playerService.cacheService = cacheService
@@ -203,7 +214,11 @@ struct ContentView: View {
             }
         }
         .onChange(of: scenePhase) { _, newPhase in
-            if newPhase == .background {
+            if newPhase == .active {
+                Task {
+                    await musicService.loadCatalog()
+                }
+            } else if newPhase == .background {
                 playerService.savePlaybackState()
             }
         }

@@ -182,6 +182,28 @@ actor StorageService {
         throw StorageError.uploadFailed("Max retries exceeded")
     }
 
+    /// Force upload data, overwriting if exists. Used for catalog.json.
+    func forceUploadData(_ data: Data, s3Key: String, contentType: String) async throws -> String {
+        let maxRetries = 3
+
+        for attempt in 0..<maxRetries {
+            do {
+                try await performUpload(data: data, s3Key: s3Key, contentType: contentType)
+                existingKeysCache?.insert(s3Key)
+                return getPublicURL(for: s3Key)
+            } catch {
+                if attempt < maxRetries - 1 {
+                    let waitTime = pow(2.0, Double(attempt + 1))
+                    try await Task.sleep(for: .seconds(waitTime))
+                } else {
+                    throw error
+                }
+            }
+        }
+
+        throw StorageError.uploadFailed("Max retries exceeded")
+    }
+
     private func performUpload(data: Data, s3Key: String, contentType: String) async throws {
         // Virtual-hosted style: bucket in hostname, key in path
         let fullPath = "/\(prefixedKey(s3Key))"

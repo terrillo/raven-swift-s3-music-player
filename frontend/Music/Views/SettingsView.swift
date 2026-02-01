@@ -12,6 +12,7 @@ struct SettingsView: View {
     var musicService: MusicService
 
     @AppStorage("streamingModeEnabled") private var streamingModeEnabled = false
+    @State private var cdnPrefix: String = NSUbiquitousKeyValueStore.default.string(forKey: "cdnPrefix") ?? MusicService.defaultCDNPrefix
     @State private var showingCacheSheet = false
     @State private var showingClearConfirmation = false
     @State private var showingDeleteAllConfirmation = false
@@ -66,6 +67,25 @@ struct SettingsView: View {
                     } label: {
                         Label("Clear Cache", systemImage: "trash")
                     }
+                }
+
+                Section {
+                    HStack {
+                        Label("CDN Prefix", systemImage: "cloud")
+                        Spacer()
+                        TextField("music", text: $cdnPrefix)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 120)
+                            .multilineTextAlignment(.trailing)
+                            .onChange(of: cdnPrefix) { _, newValue in
+                                NSUbiquitousKeyValueStore.default.set(newValue, forKey: "cdnPrefix")
+                                NSUbiquitousKeyValueStore.default.synchronize()
+                            }
+                    }
+                } header: {
+                    Text("Sync")
+                } footer: {
+                    Text("Auto-synced from macOS. Only change if you need to override.")
                 }
 
                 Section {

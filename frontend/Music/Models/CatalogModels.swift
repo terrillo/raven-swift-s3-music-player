@@ -13,8 +13,9 @@ import SwiftData
 
 @Model
 final class CatalogArtist {
-    @Attribute(.unique) var id: String  // sanitized artist name
-    var name: String
+    // CloudKit requires: no unique constraints, all properties optional or with defaults
+    var id: String = ""
+    var name: String = ""
     var bio: String?
     var imageUrl: String?
     var genre: String?
@@ -25,10 +26,10 @@ final class CatalogArtist {
     var beginDate: String?
     var endDate: String?
     var disambiguation: String?
-    var updatedAt: Date
+    var updatedAt: Date = Date()
 
     @Relationship(deleteRule: .cascade, inverse: \CatalogAlbum.artist)
-    var albums: [CatalogAlbum]
+    var albums: [CatalogAlbum]?
 
     init(
         id: String,
@@ -69,7 +70,7 @@ final class CatalogArtist {
             genre: genre,
             style: style,
             mood: mood,
-            albums: albums.sorted { ($0.name) < ($1.name) }.map { $0.toAlbum() },
+            albums: (albums ?? []).sorted { ($0.name) < ($1.name) }.map { $0.toAlbum() },
             artistType: artistType,
             area: area,
             beginDate: beginDate,
@@ -83,8 +84,9 @@ final class CatalogArtist {
 
 @Model
 final class CatalogAlbum {
-    @Attribute(.unique) var id: String  // "Artist/Album" pattern
-    var name: String
+    // CloudKit requires: no unique constraints, all properties optional or with defaults
+    var id: String = ""
+    var name: String = ""
     var imageUrl: String?
     var wiki: String?
     var releaseDate: Int?
@@ -97,12 +99,12 @@ final class CatalogAlbum {
     var label: String?
     var barcode: String?
     var mediaFormat: String?
-    var updatedAt: Date
+    var updatedAt: Date = Date()
 
     var artist: CatalogArtist?
 
     @Relationship(deleteRule: .cascade, inverse: \CatalogTrack.catalogAlbum)
-    var tracks: [CatalogTrack]
+    var tracks: [CatalogTrack]?
 
     init(
         id: String,
@@ -149,7 +151,7 @@ final class CatalogAlbum {
             style: style,
             mood: mood,
             theme: theme,
-            tracks: tracks.sorted { ($0.trackNumber ?? 999) < ($1.trackNumber ?? 999) }.map { $0.toTrack() },
+            tracks: (tracks ?? []).sorted { ($0.trackNumber ?? 999) < ($1.trackNumber ?? 999) }.map { $0.toTrack() },
             releaseType: releaseType,
             country: country,
             label: label,
@@ -163,13 +165,14 @@ final class CatalogAlbum {
 
 @Model
 final class CatalogTrack {
-    @Attribute(.unique) var s3Key: String  // Primary key
-    var title: String
+    // CloudKit requires: no unique constraints, all properties optional or with defaults
+    var s3Key: String = ""
+    var title: String = ""
     var artistName: String?
     var albumName: String?
     var trackNumber: Int?
     var duration: Int?
-    var format: String
+    var format: String = ""
     var url: String?
     var embeddedArtworkUrl: String?
     var genre: String?
@@ -188,7 +191,7 @@ final class CatalogTrack {
     var channels: Int?
     var filesize: Int?
     var originalFormat: String?
-    var updatedAt: Date
+    var updatedAt: Date = Date()
 
     var catalogAlbum: CatalogAlbum?
 
@@ -284,10 +287,11 @@ final class CatalogTrack {
 /// Metadata about the catalog itself (total tracks, generation time)
 @Model
 final class CatalogMetadata {
-    @Attribute(.unique) var id: String
-    var totalTracks: Int
-    var generatedAt: Date
-    var updatedAt: Date
+    // CloudKit requires: no unique constraints, all properties optional or with defaults
+    var id: String = "main"
+    var totalTracks: Int = 0
+    var generatedAt: Date = Date()
+    var updatedAt: Date = Date()
 
     init(id: String = "main", totalTracks: Int = 0) {
         self.id = id

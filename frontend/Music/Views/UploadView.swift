@@ -367,11 +367,11 @@ struct UploadPreviewSheet: View {
 
                 Spacer()
 
-                Button("Start Upload") {
+                Button(preview.newFiles.isEmpty ? "Rebuild Catalog" : "Start Upload") {
                     onStartUpload()
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(preview.newFiles.isEmpty)
+                .disabled(preview.newFiles.isEmpty && preview.skippedFiles.isEmpty)
             }
             .padding()
         }
@@ -689,6 +689,14 @@ struct UploadSettingsView: View {
 
         do {
             try config.saveToKeychain()
+
+            // Save CDN settings to iCloud for iOS to discover
+            let store = NSUbiquitousKeyValueStore.default
+            let cdnBase = "https://\(spacesBucket).\(spacesRegion).cdn.digitaloceanspaces.com"
+            store.set(cdnBase, forKey: "cdnBaseURL")
+            store.set(spacesPrefix, forKey: "cdnPrefix")
+            store.synchronize()
+
             dismiss()
         } catch {
             self.error = error

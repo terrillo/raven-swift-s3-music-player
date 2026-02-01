@@ -2,7 +2,7 @@
 //  MusicService.swift
 //  Music
 //
-//  Loads catalog exclusively from SwiftData (populated by macOS upload feature).
+//  Loads catalog from SwiftData or fetches from CDN if empty.
 //
 
 import Foundation
@@ -17,6 +17,23 @@ class MusicService {
     private(set) var lastUpdated: Date?
 
     private var modelContext: ModelContext?
+
+    // CDN settings (synced via iCloud Key-Value storage)
+    static let defaultCDNBase = "https://terrillo.sfo3.cdn.digitaloceanspaces.com"
+    static let defaultCDNPrefix = "music"
+
+    /// Get catalog URL - reads from iCloud Key-Value store (set by macOS uploader)
+    private var catalogURL: URL? {
+        let store = NSUbiquitousKeyValueStore.default
+        let base = store.string(forKey: "cdnBaseURL") ?? Self.defaultCDNBase
+        let prefix = store.string(forKey: "cdnPrefix") ?? Self.defaultCDNPrefix
+        return URL(string: "\(base)/\(prefix)/catalog.json")
+    }
+
+    /// Sync iCloud Key-Value store on launch
+    static func syncCloudSettings() {
+        NSUbiquitousKeyValueStore.default.synchronize()
+    }
 
     // Cached computed properties for performance with large catalogs
     private var _cachedSongs: [Track]?
@@ -110,23 +127,29 @@ class MusicService {
         error = nil
         invalidateCaches()
 
-        // Load exclusively from SwiftData
+        // Sync iCloud settings first (get latest CDN prefix from macOS)
+        Self.syncCloudSettings()
+
+        // Try loading from SwiftData first
         await loadFromSwiftData()
+
+        // If local is empty, fetch from CDN
+        if catalog?.artists.isEmpty ?? true {
+            await fetchFromCDN()
+        }
 
         isLoading = false
     }
 
-    /// Load catalog from SwiftData (populated by macOS upload, synced via CloudKit)
+    /// Load catalog from SwiftData
     private func loadFromSwiftData() async {
         guard let modelContext else {
-            // No model context - catalog will be empty
             catalog = MusicCatalog(artists: [], totalTracks: 0, generatedAt: Date().ISO8601Format())
             return
         }
 
         let descriptor = FetchDescriptor<CatalogArtist>()
         guard let catalogArtists = try? modelContext.fetch(descriptor), !catalogArtists.isEmpty else {
-            // No catalog data yet - this is expected on fresh install
             catalog = MusicCatalog(artists: [], totalTracks: 0, generatedAt: Date().ISO8601Format())
             return
         }
@@ -147,5 +170,128 @@ class MusicService {
 
         catalog = MusicCatalog(artists: artists, totalTracks: totalTracks, generatedAt: generatedAt)
         lastUpdated = metadata?.updatedAt ?? Date()
+    }
+
+    /// Fetch catalog.json from CDN and populate SwiftData
+    private func fetchFromCDN() async {
+        guard let url = catalogURL else {
+            print("⚠️ Invalid catalog URL")
+            return
+        }
+
+        do {
+            print("📡 Fetching catalog from: \(url)")
+            let (data, response) = try await URLSession.shared.data(from: url)
+
+            guard let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200 else {
+                print("⚠️ Catalog not found on CDN (status: \((response as? HTTPURLResponse)?.statusCode ?? 0)) \(url)")
+                return
+            }
+
+            let remoteCatalog = try JSONDecoder().decode(MusicCatalog.self, from: data)
+
+            // Save to SwiftData for offline access
+            await saveCatalogToSwiftData(remoteCatalog)
+
+            catalog = remoteCatalog
+            lastUpdated = Date()
+            print("✅ Fetched catalog from CDN: \(remoteCatalog.artists.count) artists")
+        } catch {
+            print("❌ Failed to fetch catalog from CDN: \(error)")
+            self.error = error
+        }
+    }
+
+    /// Save fetched catalog to SwiftData for offline access
+    private func saveCatalogToSwiftData(_ remoteCatalog: MusicCatalog) async {
+        guard let modelContext else { return }
+
+        // Delete existing catalog data
+        try? modelContext.delete(model: CatalogTrack.self)
+        try? modelContext.delete(model: CatalogAlbum.self)
+        try? modelContext.delete(model: CatalogArtist.self)
+        try? modelContext.delete(model: CatalogMetadata.self)
+
+        // Convert and insert artists
+        for artist in remoteCatalog.artists {
+            let catalogArtist = CatalogArtist(
+                id: artist.id,
+                name: artist.name,
+                bio: artist.bio,
+                imageUrl: artist.imageUrl,
+                genre: artist.genre,
+                style: artist.style,
+                mood: artist.mood,
+                artistType: artist.artistType,
+                area: artist.area,
+                beginDate: artist.beginDate,
+                endDate: artist.endDate,
+                disambiguation: artist.disambiguation
+            )
+
+            for album in artist.albums {
+                let catalogAlbum = CatalogAlbum(
+                    id: album.id,
+                    name: album.name,
+                    imageUrl: album.imageUrl,
+                    wiki: album.wiki,
+                    releaseDate: album.releaseDate,
+                    genre: album.genre,
+                    style: album.style,
+                    mood: album.mood,
+                    theme: album.theme,
+                    releaseType: album.releaseType,
+                    country: album.country,
+                    label: album.label,
+                    barcode: album.barcode,
+                    mediaFormat: album.mediaFormat
+                )
+                catalogAlbum.artist = catalogArtist
+                if catalogArtist.albums == nil { catalogArtist.albums = [] }
+                catalogArtist.albums?.append(catalogAlbum)
+
+                for track in album.tracks {
+                    let catalogTrack = CatalogTrack(
+                        s3Key: track.s3Key,
+                        title: track.title,
+                        artistName: track.artist,
+                        albumName: track.album,
+                        trackNumber: track.trackNumber,
+                        duration: track.duration,
+                        format: track.format,
+                        url: track.url,
+                        embeddedArtworkUrl: track.embeddedArtworkUrl,
+                        genre: track.genre,
+                        style: track.style,
+                        mood: track.mood,
+                        theme: track.theme,
+                        albumArtist: track.albumArtist,
+                        trackTotal: track.trackTotal,
+                        discNumber: track.discNumber,
+                        discTotal: track.discTotal,
+                        year: track.year,
+                        composer: track.composer,
+                        comment: track.comment,
+                        bitrate: track.bitrate,
+                        samplerate: track.samplerate,
+                        channels: track.channels,
+                        filesize: track.filesize,
+                        originalFormat: track.originalFormat
+                    )
+                    catalogTrack.catalogAlbum = catalogAlbum
+                    if catalogAlbum.tracks == nil { catalogAlbum.tracks = [] }
+                    catalogAlbum.tracks?.append(catalogTrack)
+                }
+            }
+
+            modelContext.insert(catalogArtist)
+        }
+
+        // Save metadata
+        let metadata = CatalogMetadata(totalTracks: remoteCatalog.totalTracks)
+        modelContext.insert(metadata)
+
+        try? modelContext.save()
     }
 }
