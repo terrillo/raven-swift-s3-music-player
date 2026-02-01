@@ -16,6 +16,7 @@ struct S3Credentials: Codable, Equatable {
     var bucket: String
     var region: String
     var prefix: String
+    var lastFMApiKey: String
 
     var isValid: Bool {
         !accessKey.isEmpty && !secretKey.isEmpty && !bucket.isEmpty && !region.isEmpty
@@ -36,7 +37,8 @@ struct S3Credentials: Codable, Equatable {
         secretKey: "",
         bucket: "",
         region: "sfo3",
-        prefix: "music"
+        prefix: "music",
+        lastFMApiKey: ""
     )
 }
 

@@ -168,6 +168,7 @@ struct Track: Codable, Identifiable {
     let s3Key: String
     let url: String?
     let embeddedArtworkUrl: String?
+    let albumArtworkUrl: String?  // Fallback when no embedded artwork
     let genre: String?
     let style: String?
     let mood: String?
@@ -191,6 +192,7 @@ struct Track: Codable, Identifiable {
         case trackNumber = "track_number"
         case s3Key = "s3_key"
         case embeddedArtworkUrl = "embedded_artwork_url"
+        case albumArtworkUrl = "album_artwork_url"
         case albumArtist = "album_artist"
         case trackTotal = "track_total"
         case discNumber = "disc_number"
@@ -215,6 +217,7 @@ struct Track: Codable, Identifiable {
         s3Key: String,
         url: String? = nil,
         embeddedArtworkUrl: String? = nil,
+        albumArtworkUrl: String? = nil,
         genre: String? = nil,
         style: String? = nil,
         mood: String? = nil,
@@ -241,6 +244,7 @@ struct Track: Codable, Identifiable {
         self.s3Key = s3Key
         self.url = url
         self.embeddedArtworkUrl = embeddedArtworkUrl
+        self.albumArtworkUrl = albumArtworkUrl
         self.genre = genre
         self.style = style
         self.mood = mood

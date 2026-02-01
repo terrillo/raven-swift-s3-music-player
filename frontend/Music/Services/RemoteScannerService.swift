@@ -135,7 +135,8 @@ class RemoteScannerService {
 
     /// Import discovered files into the database.
     /// Creates UploadedTrack records with basic metadata extracted from S3 keys.
-    func importDiscoveredFiles(credentials: S3Credentials) async -> Int {
+    /// Fetches artist/album images from TheAudioDB with Last.fm fallback.
+    func importDiscoveredFiles(credentials: S3Credentials, lastFMApiKey: String = "") async -> Int {
         guard let modelContext else { return 0 }
 
         isImporting = true
@@ -143,7 +144,12 @@ class RemoteScannerService {
         importedCount = 0
         currentImportFile = ""
 
+        // Initialize API services for metadata fetching
         let s3 = S3Service(credentials: credentials)
+        let theAudioDB = TheAudioDBService(s3Service: s3)
+        let musicBrainz = MusicBrainzService()
+        let lastFM = LastFMService(apiKey: lastFMApiKey, s3Service: s3)
+
         let total = discoveredFiles.count
 
         print("[RemoteScanner] Starting import of \(total) files")
@@ -179,29 +185,73 @@ class RemoteScannerService {
 
             modelContext.insert(track)
 
-            // Create artist if needed
+            // Create artist if needed - fetch metadata from APIs
             let artistId = track.uploadedArtistId!
             let artistDescriptor = FetchDescriptor<UploadedArtist>(
                 predicate: #Predicate { $0.id == artistId }
             )
             if (try? modelContext.fetch(artistDescriptor))?.first == nil {
+                // Fetch artist info from TheAudioDB
+                let artistInfo = await theAudioDB.fetchArtistInfo(artistName, modelContainer: modelContext.container)
+                let mbDetails = await musicBrainz.getArtistDetails(artistName)
+
                 let artist = UploadedArtist(id: artistId, name: artistName)
+                artist.imageUrl = artistInfo.imageUrl
+                artist.bio = artistInfo.bio
+                artist.genre = artistInfo.genre
+                artist.style = artistInfo.style
+                artist.mood = artistInfo.mood
+                artist.artistType = mbDetails.artistType ?? artistInfo.artistType
+                artist.area = mbDetails.area ?? artistInfo.area
+                artist.beginDate = mbDetails.beginDate ?? artistInfo.beginDate
+                artist.endDate = mbDetails.endDate ?? artistInfo.endDate
+                artist.disambiguation = mbDetails.disambiguation ?? artistInfo.disambiguation
                 modelContext.insert(artist)
+
+                print("[RemoteScanner] Created artist '\(artistName)' with image: \(artistInfo.imageUrl != nil)")
             }
 
-            // Create album if needed
+            // Create album if needed - fetch metadata from APIs
             let albumId = track.uploadedAlbumId!
             let albumDescriptor = FetchDescriptor<UploadedAlbum>(
                 predicate: #Predicate { $0.id == albumId }
             )
             if (try? modelContext.fetch(albumDescriptor))?.first == nil {
+                // Fetch album info from TheAudioDB with Last.fm fallback
+                var albumInfo = await theAudioDB.fetchAlbumInfo(artistName, albumName, modelContainer: modelContext.container)
+
+                // Fallback to Last.fm if no image
+                if albumInfo.imageUrl == nil && !lastFMApiKey.isEmpty {
+                    let lastFmInfo = await lastFM.fetchAlbumInfo(artistName, albumName)
+                    if albumInfo.name == nil { albumInfo.name = lastFmInfo.name }
+                    if albumInfo.imageUrl == nil { albumInfo.imageUrl = lastFmInfo.imageUrl }
+                    if albumInfo.wiki == nil { albumInfo.wiki = lastFmInfo.wiki }
+                }
+
+                // Get additional details from MusicBrainz
+                let mbInfo = await musicBrainz.getReleaseDetails(artistName, albumName)
+
                 let album = UploadedAlbum(
                     id: albumId,
-                    name: albumName,
+                    name: albumInfo.name ?? albumName,
                     localName: albumName,
                     artistId: artistId
                 )
+                album.imageUrl = albumInfo.imageUrl
+                album.wiki = albumInfo.wiki
+                album.releaseDate = albumInfo.releaseDate ?? mbInfo.releaseDate
+                album.genre = albumInfo.genre
+                album.style = albumInfo.style
+                album.mood = albumInfo.mood
+                album.theme = albumInfo.theme
+                album.releaseType = mbInfo.releaseType ?? albumInfo.releaseType
+                album.country = mbInfo.country ?? albumInfo.country
+                album.label = mbInfo.label ?? albumInfo.label
+                album.barcode = mbInfo.barcode
+                album.mediaFormat = mbInfo.mediaFormat
                 modelContext.insert(album)
+
+                print("[RemoteScanner] Created album '\(albumName)' with image: \(album.imageUrl != nil)")
             }
 
             importedCount = index + 1
@@ -250,7 +300,7 @@ class RemoteScannerService {
 
     func configure(modelContext: ModelContext) {}
     func scanRemote(credentials: S3Credentials) async -> [String] { [] }
-    func importDiscoveredFiles(credentials: S3Credentials) async -> Int { 0 }
+    func importDiscoveredFiles(credentials: S3Credentials, lastFMApiKey: String = "") async -> Int { 0 }
     func testConnection(credentials: S3Credentials) async -> (success: Bool, message: String) { (false, "Not available on iOS") }
 }
 

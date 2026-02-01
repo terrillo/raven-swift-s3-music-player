@@ -187,6 +187,9 @@ class MusicService {
                 let uploadedAlbum = albumMap[albumId]
                 let albumName = uploadedAlbum?.name ?? albumId.components(separatedBy: "/").last ?? "Unknown Album"
 
+                // Get album artwork URL for tracks to use as fallback
+                let albumImageUrl = uploadedAlbum?.imageUrl
+
                 // Build Track array
                 let trackArray = albumTracks.sorted {
                     ($0.discNumber ?? 1, $0.trackNumber ?? 0) < ($1.discNumber ?? 1, $1.trackNumber ?? 0)
@@ -201,6 +204,7 @@ class MusicService {
                         s3Key: track.s3Key,
                         url: track.url,
                         embeddedArtworkUrl: track.embeddedArtworkUrl,
+                        albumArtworkUrl: albumImageUrl,  // Fallback for songs without embedded art
                         genre: track.genre,
                         style: track.style,
                         mood: track.mood,
@@ -220,13 +224,13 @@ class MusicService {
                     )
                 }
 
-                // Fallback: album artwork → first track's embedded artwork
-                let albumImageUrl = uploadedAlbum?.imageUrl
+                // Fallback: album artwork → first track's embedded artwork (for album display)
+                let finalAlbumImageUrl = albumImageUrl
                     ?? trackArray.first?.embeddedArtworkUrl
 
                 let album = Album(
                     name: albumName,
-                    imageUrl: albumImageUrl,
+                    imageUrl: finalAlbumImageUrl,
                     wiki: uploadedAlbum?.wiki,
                     releaseDate: uploadedAlbum?.releaseDate,
                     genre: uploadedAlbum?.genre,

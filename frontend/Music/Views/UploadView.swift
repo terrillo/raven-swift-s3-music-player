@@ -23,7 +23,6 @@ struct UploadView: View {
     @State private var isDragging = false
     @State private var showingFolderPicker = false
     @State private var showingSettings = false
-    @State private var lastFMApiKey = ""
     @State private var showingScanResults = false
     @State private var lastImportCount: Int?
     @State private var isTestingConnection = false
@@ -93,7 +92,7 @@ struct UploadView: View {
         }
         .frame(minWidth: 400, minHeight: 300)
         .sheet(isPresented: $showingSettings) {
-            S3SettingsView(keychainService: keychainService, lastFMApiKey: $lastFMApiKey)
+            S3SettingsView(keychainService: keychainService)
         }
         .fileImporter(
             isPresented: $showingFolderPicker,
@@ -727,7 +726,7 @@ struct UploadView: View {
             await uploadService.uploadFolder(
                 folder,
                 credentials: keychainService.credentials,
-                lastFMApiKey: lastFMApiKey,
+                lastFMApiKey: keychainService.credentials.lastFMApiKey,
                 forceReupload: forceReupload
             )
         }
@@ -755,7 +754,7 @@ struct UploadView: View {
             await uploadService.uploadFolder(
                 preparation.folderURL,
                 credentials: keychainService.credentials,
-                lastFMApiKey: lastFMApiKey,
+                lastFMApiKey: keychainService.credentials.lastFMApiKey,
                 forceReupload: forceReupload
             )
             uploadService.clearPreparation()
@@ -809,7 +808,10 @@ struct UploadView: View {
     private func importDiscoveredFiles() {
         showingScanResults = false
         Task {
-            let count = await scannerService.importDiscoveredFiles(credentials: keychainService.credentials)
+            let count = await scannerService.importDiscoveredFiles(
+                credentials: keychainService.credentials,
+                lastFMApiKey: keychainService.credentials.lastFMApiKey
+            )
             lastImportCount = count
         }
     }
@@ -862,13 +864,13 @@ struct UploadView: View {
 struct S3SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     let keychainService: KeychainService
-    @Binding var lastFMApiKey: String
 
     @State private var accessKey = ""
     @State private var secretKey = ""
     @State private var bucket = ""
     @State private var region = "sfo3"
     @State private var prefix = "music"
+    @State private var lastFMApiKey = ""
     @State private var isSaving = false
     @State private var error: String?
 
@@ -956,6 +958,7 @@ struct S3SettingsView: View {
         bucket = creds.bucket
         region = creds.region
         prefix = creds.prefix
+        lastFMApiKey = creds.lastFMApiKey
     }
 
     private func saveCredentials() {
@@ -967,7 +970,8 @@ struct S3SettingsView: View {
             secretKey: secretKey,
             bucket: bucket,
             region: region,
-            prefix: prefix
+            prefix: prefix,
+            lastFMApiKey: lastFMApiKey
         )
 
         do {
@@ -987,6 +991,7 @@ struct S3SettingsView: View {
         bucket = ""
         region = "sfo3"
         prefix = "music"
+        lastFMApiKey = ""
     }
 }
 
