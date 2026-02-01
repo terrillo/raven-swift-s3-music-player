@@ -8,6 +8,7 @@
 
 import Foundation
 import CryptoKit
+import SwiftData
 
 #if os(macOS)
 
@@ -33,6 +34,59 @@ actor S3Service {
     }
 
     // MARK: - Public Methods
+
+    /// List all files with SwiftData caching (5-minute TTL).
+    /// Returns cached keys if available and not expired, otherwise fetches fresh.
+    func listAllFilesCached(modelContainer: ModelContainer, forceRefresh: Bool = false) async throws -> Set<String> {
+        let bucket = credentials.bucket
+        let prefix = credentials.prefix
+
+        // Check cache on main actor
+        if !forceRefresh {
+            let cached = await MainActor.run { () -> (keys: Set<String>, age: Int)? in
+                let context = modelContainer.mainContext
+                let descriptor = FetchDescriptor<CachedS3Keys>(
+                    predicate: #Predicate { $0.bucket == bucket && $0.prefix == prefix }
+                )
+                guard let cache = try? context.fetch(descriptor).first, !cache.isExpired else {
+                    return nil
+                }
+                return (cache.keys, cache.ageSeconds)
+            }
+
+            if let cached {
+                print("[S3Service] Using cached keys (\(cached.keys.count) keys, \(cached.age)s old)")
+                existingKeysCache = cached.keys
+                return cached.keys
+            }
+        }
+
+        // Fetch fresh from S3
+        let keys = try await listAllFiles()
+
+        // Update cache on main actor
+        await MainActor.run {
+            let context = modelContainer.mainContext
+
+            // Delete old cache entries for this bucket/prefix
+            let descriptor = FetchDescriptor<CachedS3Keys>(
+                predicate: #Predicate { $0.bucket == bucket && $0.prefix == prefix }
+            )
+            if let existing = try? context.fetch(descriptor) {
+                for cache in existing {
+                    context.delete(cache)
+                }
+            }
+
+            // Insert new cache
+            let newCache = CachedS3Keys(bucket: bucket, prefix: prefix, keys: keys)
+            context.insert(newCache)
+            try? context.save()
+            print("[S3Service] Cached \(keys.count) keys (TTL: \(CachedS3Keys.ttlSeconds)s)")
+        }
+
+        return keys
+    }
 
     /// List all files in the bucket under the configured prefix.
     /// Returns a set of S3 keys (without prefix) for O(1) lookups.

@@ -7,6 +7,7 @@
 
 import Foundation
 import AVFoundation
+import SwiftData
 
 #if os(macOS)
 import AppKit
@@ -64,6 +65,7 @@ class MetadataService {
     // MARK: - Metadata Extraction
 
     /// Extract metadata from an audio file.
+    /// Uses AVFoundation with ffprobe fallback for FLAC files.
     func extract(from fileURL: URL) async -> ExtractedMetadata {
         let format = fileURL.pathExtension.lowercased()
 
@@ -86,6 +88,7 @@ class MetadataService {
 
         // Try to extract metadata using AVFoundation
         let asset = AVURLAsset(url: fileURL)
+        var avFoundationSucceeded = false
 
         // Load asset properties
         do {
@@ -117,12 +120,211 @@ class MetadataService {
             let formatMetadata = try await asset.load(.metadata)
             extractFormatMetadata(formatMetadata, into: &metadata)
 
+            avFoundationSucceeded = true
         } catch {
             print("Failed to load metadata from \(fileURL.lastPathComponent): \(error)")
         }
 
+        // FLAC fallback: Use ffprobe if AVFoundation failed or returned incomplete metadata
+        #if os(macOS)
+        if format == "flac" && (metadata.artist == nil || metadata.album == nil || !avFoundationSucceeded) {
+            if let ffprobeMetadata = await extractWithFFprobe(from: fileURL) {
+                metadata = mergeMetadata(primary: ffprobeMetadata, fallback: metadata)
+                print("[MetadataService] Used ffprobe fallback for FLAC: \(fileURL.lastPathComponent)")
+            }
+        }
+        #endif
+
         return metadata
     }
+
+    #if os(macOS)
+    // MARK: - FFprobe Fallback
+
+    /// Extract metadata using ffprobe (fallback for FLAC files).
+    private func extractWithFFprobe(from fileURL: URL) async -> ExtractedMetadata? {
+        // Try common ffprobe locations
+        let ffprobePaths = [
+            "/opt/homebrew/bin/ffprobe",
+            "/usr/local/bin/ffprobe",
+            "/usr/bin/ffprobe"
+        ]
+
+        var ffprobePath: String?
+        for path in ffprobePaths {
+            if FileManager.default.fileExists(atPath: path) {
+                ffprobePath = path
+                break
+            }
+        }
+
+        guard let ffprobePath else {
+            return nil
+        }
+
+        return await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: ffprobePath)
+                process.arguments = [
+                    "-v", "quiet",
+                    "-print_format", "json",
+                    "-show_format",
+                    "-show_streams",
+                    fileURL.path
+                ]
+
+                let pipe = Pipe()
+                process.standardOutput = pipe
+                process.standardError = FileHandle.nullDevice
+
+                do {
+                    try process.run()
+                    process.waitUntilExit()
+
+                    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                    if let result = self.parseFFprobeOutput(data, format: fileURL.pathExtension.lowercased()) {
+                        continuation.resume(returning: result)
+                        return
+                    }
+                } catch {
+                    print("[MetadataService] ffprobe failed: \(error)")
+                }
+
+                continuation.resume(returning: nil)
+            }
+        }
+    }
+
+    /// Parse ffprobe JSON output into ExtractedMetadata.
+    private func parseFFprobeOutput(_ data: Data, format: String) -> ExtractedMetadata? {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let formatInfo = json["format"] as? [String: Any] else {
+            return nil
+        }
+
+        // Get tags from format section
+        let tags = formatInfo["tags"] as? [String: Any] ?? [:]
+
+        // Helper to get case-insensitive tag
+        func getTag(_ key: String) -> String? {
+            // Try exact match first
+            if let value = tags[key] as? String, !value.isEmpty {
+                return value
+            }
+            // Try case-insensitive
+            let lowerKey = key.lowercased()
+            for (k, v) in tags {
+                if k.lowercased() == lowerKey, let str = v as? String, !str.isEmpty {
+                    return str
+                }
+            }
+            return nil
+        }
+
+        var metadata = ExtractedMetadata(
+            title: getTag("TITLE") ?? getTag("title") ?? "",
+            format: format
+        )
+
+        metadata.artist = getTag("ARTIST") ?? getTag("artist")
+        metadata.album = getTag("ALBUM") ?? getTag("album")
+        metadata.albumArtist = getTag("ALBUMARTIST") ?? getTag("album_artist")
+        metadata.genre = getTag("GENRE") ?? getTag("genre")
+        metadata.composer = getTag("COMPOSER") ?? getTag("composer")
+        metadata.comment = getTag("COMMENT") ?? getTag("comment")
+
+        // Track number (may be "1/12" format)
+        if let trackStr = getTag("TRACKNUMBER") ?? getTag("track") {
+            let parts = trackStr.components(separatedBy: "/")
+            metadata.trackNumber = Int(parts[0].trimmingCharacters(in: .whitespaces))
+            if parts.count > 1 {
+                metadata.trackTotal = Int(parts[1].trimmingCharacters(in: .whitespaces))
+            }
+        }
+
+        // Disc number
+        if let discStr = getTag("DISCNUMBER") ?? getTag("disc") {
+            let parts = discStr.components(separatedBy: "/")
+            metadata.discNumber = Int(parts[0].trimmingCharacters(in: .whitespaces))
+            if parts.count > 1 {
+                metadata.discTotal = Int(parts[1].trimmingCharacters(in: .whitespaces))
+            }
+        }
+
+        // Year/Date
+        if let dateStr = getTag("DATE") ?? getTag("date") ?? getTag("YEAR") ?? getTag("year") {
+            metadata.year = UploadIdentifiers.extractYear(dateStr)
+        }
+
+        // Duration (in seconds)
+        if let durationStr = formatInfo["duration"] as? String,
+           let duration = Double(durationStr) {
+            metadata.duration = Int(duration)
+        }
+
+        // Get audio stream info
+        if let streams = json["streams"] as? [[String: Any]] {
+            for stream in streams {
+                if stream["codec_type"] as? String == "audio" {
+                    if let sampleRate = stream["sample_rate"] as? String {
+                        metadata.samplerate = Int(sampleRate)
+                    }
+                    if let channels = stream["channels"] as? Int {
+                        metadata.channels = channels
+                    }
+                    break
+                }
+            }
+        }
+
+        // File size
+        if let sizeStr = formatInfo["size"] as? String {
+            metadata.filesize = Int(sizeStr)
+        }
+
+        // Calculate bitrate
+        if let bitrateStr = formatInfo["bit_rate"] as? String,
+           let bitrate = Double(bitrateStr) {
+            metadata.bitrate = bitrate / 1000.0  // Convert to kbps
+        }
+
+        return metadata
+    }
+
+    /// Merge metadata, preferring primary values over fallback.
+    private func mergeMetadata(primary: ExtractedMetadata, fallback: ExtractedMetadata) -> ExtractedMetadata {
+        var result = primary
+
+        // Use fallback title if primary is empty
+        if result.title.isEmpty {
+            result.title = fallback.title
+        }
+
+        // Merge optional fields (prefer primary)
+        result.artist = result.artist ?? fallback.artist
+        result.album = result.album ?? fallback.album
+        result.albumArtist = result.albumArtist ?? fallback.albumArtist
+        result.trackNumber = result.trackNumber ?? fallback.trackNumber
+        result.trackTotal = result.trackTotal ?? fallback.trackTotal
+        result.discNumber = result.discNumber ?? fallback.discNumber
+        result.discTotal = result.discTotal ?? fallback.discTotal
+        result.duration = result.duration ?? fallback.duration
+        result.year = result.year ?? fallback.year
+        result.genre = result.genre ?? fallback.genre
+        result.composer = result.composer ?? fallback.composer
+        result.comment = result.comment ?? fallback.comment
+        result.format = primary.format  // Always use primary format
+        result.bitrate = result.bitrate ?? fallback.bitrate
+        result.samplerate = result.samplerate ?? fallback.samplerate
+        result.channels = result.channels ?? fallback.channels
+        result.filesize = result.filesize ?? fallback.filesize
+        result.artworkData = result.artworkData ?? fallback.artworkData
+        result.artworkMimeType = result.artworkMimeType ?? fallback.artworkMimeType
+
+        return result
+    }
+    #endif
 
     // MARK: - Common Metadata
 
@@ -339,9 +541,6 @@ class MetadataService {
 
     // MARK: - Scan Directory
 
-    // TODO: Remove after testing - temporary limit for development
-    private static let testFileLimit = 500
-
     /// Scan a directory for audio files with progress callback.
     func scanDirectory(_ directory: URL, progress: ((Int, Int) -> Void)? = nil) throws -> [URL] {
         var audioFiles: [URL] = []
@@ -372,12 +571,6 @@ class MetadataService {
         var totalFilesChecked = 0
         var lastProgressUpdate = 0
         while let url = enumerator?.nextObject() as? URL {
-            // TODO: Remove after testing - stop early if limit reached
-            if audioFiles.count >= Self.testFileLimit {
-                print("[MetadataService] TEST MODE: Stopping scan at \(Self.testFileLimit) audio files")
-                break
-            }
-
             totalFilesChecked += 1
 
             // Report progress every 100 files
@@ -402,4 +595,173 @@ class MetadataService {
 
         return audioFiles.sorted { $0.path < $1.path }
     }
+
+    #if os(macOS)
+    // MARK: - Incremental Scanning
+
+    /// Result of incremental scan comparing to previously scanned files.
+    struct IncrementalScanResult {
+        var newFiles: [URL]       // Never seen before
+        var changedFiles: [URL]   // Modified since last scan
+        var unchangedFiles: [URL] // Same modification date
+        var deletedPaths: [String] // Previously scanned but no longer exist
+
+        var totalFiles: Int { newFiles.count + changedFiles.count + unchangedFiles.count }
+        var filesToProcess: [URL] { newFiles + changedFiles }
+    }
+
+    /// Scan directory incrementally, tracking file modification dates in SwiftData.
+    /// Only processes new or changed files.
+    func scanDirectoryIncremental(
+        _ directory: URL,
+        modelContainer: ModelContainer,
+        progress: ((Int, Int) -> Void)? = nil
+    ) throws -> IncrementalScanResult {
+        print("[MetadataService] Incremental scan for: \(directory.path)")
+
+        // Fetch all previously scanned files
+        let previousScans: [String: ScannedFile] = MainActor.assumeIsolated {
+            let context = modelContainer.mainContext
+            let descriptor = FetchDescriptor<ScannedFile>()
+            let scans = (try? context.fetch(descriptor)) ?? []
+            return Dictionary(uniqueKeysWithValues: scans.map { ($0.path, $0) })
+        }
+        print("[MetadataService] Found \(previousScans.count) previously scanned files")
+
+        // Scan current directory
+        var newFiles: [URL] = []
+        var changedFiles: [URL] = []
+        var unchangedFiles: [URL] = []
+        var currentPaths = Set<String>()
+
+        let didStartAccess = directory.startAccessingSecurityScopedResource()
+        defer {
+            if didStartAccess {
+                directory.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        let resourceKeys: [URLResourceKey] = [.isRegularFileKey, .contentModificationDateKey]
+        let enumerator = FileManager.default.enumerator(
+            at: directory,
+            includingPropertiesForKeys: resourceKeys,
+            options: [.skipsHiddenFiles]
+        )
+
+        var totalFilesChecked = 0
+        var lastProgressUpdate = 0
+
+        while let url = enumerator?.nextObject() as? URL {
+            totalFilesChecked += 1
+
+            if totalFilesChecked - lastProgressUpdate >= 100 {
+                progress?(totalFilesChecked, newFiles.count + changedFiles.count)
+                lastProgressUpdate = totalFilesChecked
+            }
+
+            guard let resourceValues = try? url.resourceValues(forKeys: Set(resourceKeys)),
+                  resourceValues.isRegularFile == true else {
+                continue
+            }
+
+            guard Self.isSupportedFormat(url) else {
+                continue
+            }
+
+            let path = url.path
+            currentPaths.insert(path)
+
+            let modDate = resourceValues.contentModificationDate ?? Date()
+
+            if let existingScan = previousScans[path] {
+                // Check if modified
+                if existingScan.modificationDate == modDate {
+                    unchangedFiles.append(url)
+                } else {
+                    changedFiles.append(url)
+                }
+            } else {
+                newFiles.append(url)
+            }
+        }
+
+        // Find deleted files
+        let deletedPaths = previousScans.keys.filter { !currentPaths.contains($0) }
+
+        print("[MetadataService] Incremental scan results:")
+        print("[MetadataService]   New files: \(newFiles.count)")
+        print("[MetadataService]   Changed files: \(changedFiles.count)")
+        print("[MetadataService]   Unchanged files: \(unchangedFiles.count)")
+        print("[MetadataService]   Deleted files: \(deletedPaths.count)")
+
+        return IncrementalScanResult(
+            newFiles: newFiles.sorted { $0.path < $1.path },
+            changedFiles: changedFiles.sorted { $0.path < $1.path },
+            unchangedFiles: unchangedFiles.sorted { $0.path < $1.path },
+            deletedPaths: Array(deletedPaths)
+        )
+    }
+
+    /// Update the scanned file cache after processing.
+    func updateScannedFileCache(
+        _ files: [(url: URL, s3Key: String, existsInS3: Bool)],
+        modelContainer: ModelContainer
+    ) {
+        MainActor.assumeIsolated {
+            let context = modelContainer.mainContext
+
+            for (url, s3Key, existsInS3) in files {
+                let path = url.path
+
+                // Get modification date
+                let modDate: Date
+                if let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+                   let date = attrs[.modificationDate] as? Date {
+                    modDate = date
+                } else {
+                    modDate = Date()
+                }
+
+                // Check for existing record
+                let descriptor = FetchDescriptor<ScannedFile>(
+                    predicate: #Predicate { $0.path == path }
+                )
+
+                if let existing = try? context.fetch(descriptor).first {
+                    // Update existing
+                    existing.modificationDate = modDate
+                    existing.s3Key = s3Key
+                    existing.existsInS3 = existsInS3
+                    existing.lastChecked = Date()
+                } else {
+                    // Create new
+                    let scanned = ScannedFile(path: path, modificationDate: modDate, s3Key: s3Key)
+                    scanned.existsInS3 = existsInS3
+                    context.insert(scanned)
+                }
+            }
+
+            try? context.save()
+        }
+    }
+
+    /// Remove deleted files from the scanned file cache.
+    func removeFromScannedFileCache(_ paths: [String], modelContainer: ModelContainer) {
+        MainActor.assumeIsolated {
+            let context = modelContainer.mainContext
+
+            for path in paths {
+                let descriptor = FetchDescriptor<ScannedFile>(
+                    predicate: #Predicate { $0.path == path }
+                )
+
+                if let existing = try? context.fetch(descriptor).first {
+                    context.delete(existing)
+                }
+            }
+
+            try? context.save()
+        }
+    }
+    #endif
 }

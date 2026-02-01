@@ -79,9 +79,6 @@ class UploadService {
     private let maxConcurrentUploads = 4
     private var modelContext: ModelContext?
 
-    // TODO: Remove after testing - temporary limit for development
-    private let testFileLimit = 500
-
     // Track deduplication: s3_keys already processed in this session (matches backend catalog.py)
     // After album name correction, multiple local folders may map to the same S3 key
     private var processedS3Keys: Set<String> = []
@@ -144,13 +141,7 @@ class UploadService {
         do {
             // Phase 1: Scan for audio files
             progress.currentPhase = .scanning
-            var audioFiles = try metadataService!.scanDirectory(folderURL)
-
-            // TODO: Remove after testing - apply temporary file limit
-            if audioFiles.count > testFileLimit {
-                print("[UploadService] TEST MODE: Limiting to \(testFileLimit) files (found \(audioFiles.count))")
-                audioFiles = Array(audioFiles.prefix(testFileLimit))
-            }
+            let audioFiles = try metadataService!.scanDirectory(folderURL)
 
             progress.totalFiles = audioFiles.count
 
@@ -160,9 +151,9 @@ class UploadService {
                 return
             }
 
-            // Phase 2: List existing files in S3
+            // Phase 2: List existing files in S3 (with SwiftData caching)
             progress.currentPhase = .fetchingApiData
-            let existingKeys = try await s3.listAllFiles()
+            let existingKeys = try await s3.listAllFilesCached(modelContainer: modelContext.container)
             await s3.setExistingKeysCache(existingKeys)
 
             // Phase 3: Process files with concurrency
@@ -233,18 +224,35 @@ class UploadService {
         // Extract metadata
         let metadata = await metadataService.extract(from: fileURL)
 
-        // Get artist and album names
-        let artistName = UploadIdentifiers.normalizeArtistName(metadata.albumArtist ?? metadata.artist) ?? "Unknown Artist"
-        let albumName = metadata.album ?? "Unknown Album"
+        // Get artist and album names from metadata (with Tidal cleaning)
+        var artistName = UploadIdentifiers.normalizeArtistName(metadata.albumArtist ?? metadata.artist) ?? "Unknown Artist"
+        var rawAlbumName = metadata.album ?? "Unknown Album"
 
-        // Fetch corrected album name from TheAudioDB
-        let albumInfo = await theAudioDBService.fetchAlbumInfo(artistName, albumName)
-        let correctedAlbumName = albumInfo.name ?? albumName
+        // Fallback: extract from folder structure when metadata is missing
+        // This handles Tidal downloads where FLAC metadata may be unreadable
+        if artistName == "Unknown Artist" || rawAlbumName == "Unknown Album" {
+            let (folderArtist, folderAlbum) = UploadIdentifiers.extractFromFolderPath(fileURL, scanFolderURL: folderURL)
+            if artistName == "Unknown Artist", let folderArtist {
+                artistName = folderArtist
+            }
+            if rawAlbumName == "Unknown Album", let folderAlbum {
+                rawAlbumName = folderAlbum
+            }
+        }
+
+        let cleanedAlbumName = UploadIdentifiers.cleanAlbumName(rawAlbumName)
+
+        // Clean track title (remove Tidal-style track number/artist prefix)
+        let cleanedTitle = UploadIdentifiers.cleanTrackTitle(metadata.title, artist: artistName)
+
+        // Fetch corrected album name from TheAudioDB (using cleaned name, with SwiftData cache)
+        let albumInfo = await theAudioDBService.fetchAlbumInfo(artistName, cleanedAlbumName, modelContainer: modelContext.container)
+        let correctedAlbumName = albumInfo.name ?? cleanedAlbumName
 
         // Build S3 key
         let safeArtist = UploadIdentifiers.sanitizeS3Key(artistName)
         let safeAlbum = UploadIdentifiers.sanitizeS3Key(correctedAlbumName)
-        let safeTitle = UploadIdentifiers.sanitizeS3Key(metadata.title)
+        let safeTitle = UploadIdentifiers.sanitizeS3Key(cleanedTitle)
         let ext = (metadata.format == "flac" || metadata.format == "wav") ? "m4a" : metadata.format
         let s3Key = "\(safeArtist)/\(safeAlbum)/\(safeTitle).\(ext)"
 
@@ -318,23 +326,23 @@ class UploadService {
             }
         }
 
-        // Fetch additional metadata
+        // Fetch additional metadata (with SwiftData cache)
         var artistInfo = ArtistInfo.empty
         var mbArtistDetails = ArtistInfo.empty
         var mbReleaseDetails = AlbumInfo.empty
 
-        // Fetch artist info (for first track of each artist)
-        artistInfo = await theAudioDBService.fetchArtistInfo(artistName)
+        // Fetch artist info (for first track of each artist, with SwiftData cache)
+        artistInfo = await theAudioDBService.fetchArtistInfo(artistName, modelContainer: modelContext.container)
 
         if let mb = musicBrainzService {
             mbArtistDetails = await mb.getArtistDetails(artistName)
-            mbReleaseDetails = await mb.getReleaseDetails(artistName, albumName)
+            mbReleaseDetails = await mb.getReleaseDetails(artistName, cleanedAlbumName)
         }
 
         // Last.fm fallback for album info
         if albumInfo.imageUrl == nil && albumInfo.wiki == nil,
            let lastfm = lastFMService {
-            let lastfmInfo = await lastfm.fetchAlbumInfo(artistName, albumName)
+            let lastfmInfo = await lastfm.fetchAlbumInfo(artistName, cleanedAlbumName)
             // Merge (prefer TheAudioDB)
             let mergedAlbumInfo = AlbumInfo(
                 name: albumInfo.name ?? lastfmInfo.name,
@@ -387,7 +395,7 @@ class UploadService {
                 let uploadedAlbum = UploadedAlbum(
                     id: albumId,
                     name: correctedAlbumName,
-                    localName: albumName,
+                    localName: rawAlbumName,
                     artistId: artistId,
                     imageUrl: albumInfo.imageUrl,
                     wiki: albumInfo.wiki,
@@ -490,16 +498,9 @@ class UploadService {
             }
             print("[UploadService] Found \(audioFiles.count) local audio files")
 
-            // TODO: Remove after testing - apply temporary file limit
-            var limitedAudioFiles = audioFiles
-            if audioFiles.count > testFileLimit {
-                print("[UploadService] TEST MODE: Limiting to \(testFileLimit) files (found \(audioFiles.count))")
-                limitedAudioFiles = Array(audioFiles.prefix(testFileLimit))
-            }
-
             preparationProgress = 0.10
 
-            if limitedAudioFiles.isEmpty {
+            if audioFiles.isEmpty {
                 preparationStatus = "No audio files found"
                 preparationResult = UploadPreparation(
                     filesToUpload: [],
@@ -512,11 +513,16 @@ class UploadService {
                 return
             }
 
-            // Phase 2: List existing S3 keys (10-20%)
-            preparationStatus = "Listing remote files... (this may take a moment)"
+            // Phase 2: List existing S3 keys (10-20%) - with SwiftData caching
+            preparationStatus = "Listing remote files..."
             preparationProgress = 0.10
-            print("[UploadService] Listing existing S3 files...")
-            let existingKeys = try await s3.listAllFiles()
+            print("[UploadService] Listing existing S3 files (checking cache)...")
+            let existingKeys: Set<String>
+            if let ctx = modelContext {
+                existingKeys = try await s3.listAllFilesCached(modelContainer: ctx.container)
+            } else {
+                existingKeys = try await s3.listAllFiles()
+            }
             print("[UploadService] Found \(existingKeys.count) existing S3 keys")
             preparationProgress = 0.20
             preparationStatus = "Found \(existingKeys.count.formatted()) remote files"
@@ -524,30 +530,89 @@ class UploadService {
             // Phase 3: Process files - extract metadata and compare (20-95%)
             if useAPILookups {
                 // Accurate mode: extract metadata + API lookups for corrected album names
-                preparationStatus = "Processing \(limitedAudioFiles.count.formatted()) files with metadata..."
-                print("[UploadService] Processing files with metadata extraction and API lookups...")
+                // Uses parallel metadata extraction with batched API calls for performance
+                preparationStatus = "Processing \(audioFiles.count.formatted()) files with metadata..."
+                print("[UploadService] Processing files with PARALLEL metadata extraction and API lookups...")
 
                 var filesToUpload: [URL] = []
                 var filesToSkip: [URL] = []
-                let total = limitedAudioFiles.count
+                let total = audioFiles.count
+                let metadataBatchSize = 8  // Parallel metadata extraction
 
-                for (index, fileURL) in limitedAudioFiles.enumerated() {
-                    // Extract metadata
-                    let metadata = await metadataService.extract(from: fileURL)
+                // Step 1: Extract metadata in parallel batches (20-60%)
+                preparationStatus = "Extracting metadata in parallel..."
+                var extractedFiles: [(url: URL, metadata: ExtractedMetadata)] = []
 
-                    let artistName = UploadIdentifiers.normalizeArtistName(
+                await withTaskGroup(of: (URL, ExtractedMetadata).self) { group in
+                    var pending = 0
+                    var nextIndex = 0
+
+                    while nextIndex < audioFiles.count || pending > 0 {
+                        // Add tasks up to batch size
+                        while pending < metadataBatchSize && nextIndex < audioFiles.count {
+                            let fileURL = audioFiles[nextIndex]
+                            nextIndex += 1
+                            pending += 1
+
+                            group.addTask {
+                                let metadata = await metadataService.extract(from: fileURL)
+                                return (fileURL, metadata)
+                            }
+                        }
+
+                        // Collect one result
+                        if pending > 0 {
+                            if let result = await group.next() {
+                                extractedFiles.append(result)
+                                pending -= 1
+
+                                // Update progress (20-60% range)
+                                let progress = 0.20 + (Double(extractedFiles.count) / Double(total) * 0.40)
+                                preparationProgress = progress
+                                if extractedFiles.count % 50 == 0 {
+                                    preparationStatus = "Extracting metadata... \(extractedFiles.count)/\(total)"
+                                }
+                            }
+                        }
+                    }
+                }
+                print("[UploadService] Extracted metadata from \(extractedFiles.count) files")
+
+                // Step 2: Process API lookups and compare (60-95%)
+                // API calls remain sequential due to rate limits
+                preparationStatus = "Checking album names..."
+                for (index, (fileURL, metadata)) in extractedFiles.enumerated() {
+                    // Get artist and album names from metadata (with Tidal cleaning)
+                    var artistName = UploadIdentifiers.normalizeArtistName(
                         metadata.albumArtist ?? metadata.artist
                     ) ?? "Unknown Artist"
-                    let albumName = metadata.album ?? "Unknown Album"
+                    var rawAlbumName = metadata.album ?? "Unknown Album"
 
-                    // Lookup corrected album name from TheAudioDB (cached per artist+album)
-                    let albumInfo = await theAudioDBService.fetchAlbumInfo(artistName, albumName)
-                    let correctedAlbum = albumInfo.name ?? albumName
+                    // Fallback: extract from folder structure when metadata is missing
+                    // This handles Tidal downloads where FLAC metadata may be unreadable
+                    if artistName == "Unknown Artist" || rawAlbumName == "Unknown Album" {
+                        let (folderArtist, folderAlbum) = UploadIdentifiers.extractFromFolderPath(fileURL, scanFolderURL: folderURL)
+                        if artistName == "Unknown Artist", let folderArtist {
+                            artistName = folderArtist
+                        }
+                        if rawAlbumName == "Unknown Album", let folderAlbum {
+                            rawAlbumName = folderAlbum
+                        }
+                    }
 
-                    // Build accurate S3 key using corrected album name
+                    let cleanedAlbumName = UploadIdentifiers.cleanAlbumName(rawAlbumName)
+
+                    // Clean track title (remove Tidal-style track number/artist prefix)
+                    let cleanedTitle = UploadIdentifiers.cleanTrackTitle(metadata.title, artist: artistName)
+
+                    // Lookup corrected album name from TheAudioDB (using cleaned name, with SwiftData cache)
+                    let albumInfo = await theAudioDBService.fetchAlbumInfo(artistName, cleanedAlbumName, modelContainer: modelContext?.container)
+                    let correctedAlbum = albumInfo.name ?? cleanedAlbumName
+
+                    // Build accurate S3 key using corrected album name and cleaned title
                     let safeArtist = UploadIdentifiers.sanitizeS3Key(artistName)
                     let safeAlbum = UploadIdentifiers.sanitizeS3Key(correctedAlbum)
-                    let safeTitle = UploadIdentifiers.sanitizeS3Key(metadata.title)
+                    let safeTitle = UploadIdentifiers.sanitizeS3Key(cleanedTitle)
                     let ext = (metadata.format == "flac" || metadata.format == "wav") ? "m4a" : metadata.format
                     let s3Key = "\(safeArtist)/\(safeAlbum)/\(safeTitle).\(ext)"
 
@@ -556,8 +621,8 @@ class UploadService {
                     if !exists && (index < 10 || index % 100 == 0) {
                         print("[Debug] Local: \(fileURL.lastPathComponent)")
                         print("[Debug] Artist: '\(artistName)' -> '\(safeArtist)'")
-                        print("[Debug] Album: '\(albumName)' -> corrected: '\(correctedAlbum)' -> '\(safeAlbum)'")
-                        print("[Debug] Title: '\(metadata.title)' -> '\(safeTitle)'")
+                        print("[Debug] Album: '\(rawAlbumName)' -> cleaned: '\(cleanedAlbumName)' -> corrected: '\(correctedAlbum)' -> '\(safeAlbum)'")
+                        print("[Debug] Title: '\(metadata.title)' -> cleaned: '\(cleanedTitle)' -> '\(safeTitle)'")
                         print("[Debug] S3 Key: \(s3Key)")
                         print("[Debug] Exists in S3: \(exists)")
                         // Show similar keys that DO exist
@@ -578,9 +643,9 @@ class UploadService {
 
                     // Update UI every 50 files or at completion
                     if (index + 1) % 50 == 0 || (index + 1) == total {
-                        let progress = 0.20 + (Double(index + 1) / Double(total) * 0.75)
+                        let progress = 0.60 + (Double(index + 1) / Double(total) * 0.35)
                         preparationProgress = progress
-                        preparationStatus = "Processing... \(index + 1)/\(total) files"
+                        preparationStatus = "Checking... \(index + 1)/\(total) files"
                     }
                 }
 
@@ -594,23 +659,23 @@ class UploadService {
                 preparationResult = UploadPreparation(
                     filesToUpload: filesToUpload,
                     filesToSkip: filesToSkip,
-                    totalLocalFiles: limitedAudioFiles.count,
+                    totalLocalFiles: audioFiles.count,
                     folderURL: folderURL,
                     cachedS3Keys: existingKeys
                 )
             } else {
                 // Fast mode: path-based estimation (no API calls)
-                preparationStatus = "Comparing \(limitedAudioFiles.count.formatted()) local files..."
+                preparationStatus = "Comparing \(audioFiles.count.formatted()) local files..."
                 print("[UploadService] Using fast path-based comparison...")
 
                 let (filesToUpload, filesToSkip): ([URL], [URL]) = await withCheckedContinuation { continuation in
-                    DispatchQueue.global(qos: .userInitiated).async { [limitedAudioFiles, forceReupload] in
+                    DispatchQueue.global(qos: .userInitiated).async { [audioFiles, forceReupload] in
                         var toUpload: [URL] = []
                         var toSkip: [URL] = []
-                        let total = limitedAudioFiles.count
+                        let total = audioFiles.count
                         var lastUpdate = 0
 
-                        for (index, fileURL) in limitedAudioFiles.enumerated() {
+                        for (index, fileURL) in audioFiles.enumerated() {
                             // Build estimated S3 key from folder structure
                             let s3Key = self.buildEstimatedS3Key(for: fileURL, relativeTo: folderURL)
 
@@ -643,7 +708,7 @@ class UploadService {
                 preparationResult = UploadPreparation(
                     filesToUpload: filesToUpload,
                     filesToSkip: filesToSkip,
-                    totalLocalFiles: limitedAudioFiles.count,
+                    totalLocalFiles: audioFiles.count,
                     folderURL: folderURL,
                     cachedS3Keys: existingKeys
                 )

@@ -7,6 +7,7 @@
 //
 
 import Foundation
+import SwiftData
 
 // MARK: - Artist Info
 
@@ -105,11 +106,44 @@ actor TheAudioDBService {
         self.s3Service = s3Service
     }
 
-    // MARK: - Artist Info
+    // MARK: - Artist Info (with SwiftData cache)
 
-    func fetchArtistInfo(_ artistName: String) async -> ArtistInfo {
+    /// Fetch artist info, checking SwiftData first for persisted data.
+    func fetchArtistInfo(_ artistName: String, modelContainer: ModelContainer? = nil) async -> ArtistInfo {
         if let cached = artistCache[artistName] {
             return cached
+        }
+
+        // Check SwiftData persistent cache
+        if let container = modelContainer {
+            let artistId = UploadIdentifiers.artistId(artistName)
+            if let stored = await MainActor.run(body: { () -> ArtistInfo? in
+                let context = container.mainContext
+                let descriptor = FetchDescriptor<UploadedArtist>(
+                    predicate: #Predicate { $0.id == artistId }
+                )
+                guard let artist = try? context.fetch(descriptor).first else { return nil }
+
+                // Only use if we have meaningful data
+                guard artist.bio != nil || artist.imageUrl != nil || artist.genre != nil else { return nil }
+
+                return ArtistInfo(
+                    bio: artist.bio,
+                    imageUrl: artist.imageUrl,
+                    genre: artist.genre,
+                    style: artist.style,
+                    mood: artist.mood,
+                    artistType: artist.artistType,
+                    area: artist.area,
+                    beginDate: artist.beginDate,
+                    endDate: artist.endDate,
+                    disambiguation: artist.disambiguation
+                )
+            }) {
+                print("[TheAudioDBService] Using cached artist data for '\(artistName)'")
+                artistCache[artistName] = stored
+                return stored
+            }
         }
 
         var result = ArtistInfo()
@@ -157,12 +191,46 @@ actor TheAudioDBService {
         return result
     }
 
-    // MARK: - Album Info
+    // MARK: - Album Info (with SwiftData cache)
 
-    func fetchAlbumInfo(_ artistName: String, _ albumName: String) async -> AlbumInfo {
+    /// Fetch album info, checking SwiftData first for persisted data.
+    func fetchAlbumInfo(_ artistName: String, _ albumName: String, modelContainer: ModelContainer? = nil) async -> AlbumInfo {
         let cacheKey = "\(artistName)|\(albumName)"
         if let cached = albumCache[cacheKey] {
             return cached
+        }
+
+        // Check SwiftData persistent cache
+        if let container = modelContainer {
+            let albumId = UploadIdentifiers.albumId(artist: artistName, album: albumName)
+            if let stored = await MainActor.run(body: { () -> AlbumInfo? in
+                let context = container.mainContext
+                let descriptor = FetchDescriptor<UploadedAlbum>(
+                    predicate: #Predicate { $0.id == albumId }
+                )
+                guard let album = try? context.fetch(descriptor).first else { return nil }
+
+                // Only use if we have the corrected name (meaning we have API data)
+                guard album.name != album.localName || album.imageUrl != nil || album.wiki != nil else { return nil }
+
+                return AlbumInfo(
+                    name: album.name,
+                    imageUrl: album.imageUrl,
+                    wiki: album.wiki,
+                    releaseDate: album.releaseDate,
+                    genre: album.genre,
+                    style: album.style,
+                    mood: album.mood,
+                    theme: album.theme,
+                    releaseType: album.releaseType,
+                    country: album.country,
+                    label: album.label
+                )
+            }) {
+                print("[TheAudioDBService] Using cached album data for '\(artistName) - \(albumName)'")
+                albumCache[cacheKey] = stored
+                return stored
+            }
         }
 
         var result = AlbumInfo()
