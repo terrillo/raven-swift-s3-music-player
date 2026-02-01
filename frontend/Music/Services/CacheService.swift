@@ -548,6 +548,13 @@ class CacheService {
                 modelContext.delete(art)
             }
 
+            // Delete CachedCatalog records
+            let catalogDescriptor = FetchDescriptor<CachedCatalog>()
+            let catalogs = try modelContext.fetch(catalogDescriptor)
+            for catalog in catalogs {
+                modelContext.delete(catalog)
+            }
+
             try modelContext.save()
 
             // Clear in-memory caches

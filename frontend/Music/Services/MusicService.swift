@@ -275,4 +275,49 @@ class MusicService {
     func refreshCatalog() async {
         await loadCatalog()
     }
+
+    // MARK: - Clear All Data
+
+    /// Deletes all iCloud-synced catalog data and clears in-memory state.
+    func clearAllData() async {
+        guard let modelContext else {
+            print("[MusicService] No modelContext for clearing data")
+            return
+        }
+
+        do {
+            // Delete all UploadedTrack records
+            let trackDescriptor = FetchDescriptor<UploadedTrack>()
+            let tracks = try modelContext.fetch(trackDescriptor)
+            for track in tracks {
+                modelContext.delete(track)
+            }
+
+            // Delete all UploadedArtist records
+            let artistDescriptor = FetchDescriptor<UploadedArtist>()
+            let artists = try modelContext.fetch(artistDescriptor)
+            for artist in artists {
+                modelContext.delete(artist)
+            }
+
+            // Delete all UploadedAlbum records
+            let albumDescriptor = FetchDescriptor<UploadedAlbum>()
+            let albums = try modelContext.fetch(albumDescriptor)
+            for album in albums {
+                modelContext.delete(album)
+            }
+
+            try modelContext.save()
+
+            // Clear in-memory state
+            catalog = nil
+            invalidateCaches()
+            lastUpdated = nil
+            isUsingLocalDatabase = false
+
+            print("[MusicService] All data cleared successfully")
+        } catch {
+            print("[MusicService] Failed to clear data: \(error)")
+        }
+    }
 }

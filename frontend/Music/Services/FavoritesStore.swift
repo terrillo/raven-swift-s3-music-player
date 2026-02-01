@@ -162,6 +162,34 @@ class FavoritesStore {
         return (try? viewContext.fetch(request)) ?? []
     }
 
+    // MARK: - Clear All Data
+
+    func clearAllData() {
+        let artistRequest = NSFetchRequest<NSFetchRequestResult>(entityName: "FavoriteArtistEntity")
+        let albumRequest = NSFetchRequest<NSFetchRequestResult>(entityName: "FavoriteAlbumEntity")
+        let trackRequest = NSFetchRequest<NSFetchRequestResult>(entityName: "FavoriteTrackEntity")
+
+        let artistDelete = NSBatchDeleteRequest(fetchRequest: artistRequest)
+        let albumDelete = NSBatchDeleteRequest(fetchRequest: albumRequest)
+        let trackDelete = NSBatchDeleteRequest(fetchRequest: trackRequest)
+
+        do {
+            try viewContext.execute(artistDelete)
+            try viewContext.execute(albumDelete)
+            try viewContext.execute(trackDelete)
+            try viewContext.save()
+
+            // Clear in-memory caches
+            favoriteArtistIds.removeAll()
+            favoriteAlbumIds.removeAll()
+            favoriteTrackKeys.removeAll()
+
+            print("✅ Favorites data cleared successfully")
+        } catch {
+            print("❌ Failed to clear favorites: \(error)")
+        }
+    }
+
     // MARK: - Private Helpers
 
     private func saveAndUpdate() {

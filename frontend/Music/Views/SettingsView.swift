@@ -178,7 +178,9 @@ struct SettingsView: View {
                 Button("Delete All Data", role: .destructive) {
                     Task {
                         await cacheService.clearCache()
+                        await musicService.clearAllData()
                         AnalyticsStore.shared.clearAllData()
+                        FavoritesStore.shared.clearAllData()
                     }
                 }
                 Button("Cancel", role: .cancel) {}
