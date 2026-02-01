@@ -1,21 +1,16 @@
-# raven-swift-s3-music-player
+# Music
 
 ![macOS Screenshot](screenshots/macOS.png)
 
-A full-stack music streaming app with an offline-first SwiftUI frontend and Python backend for S3-compatible storage.
+A unified Swift music app for iOS and macOS with native upload capabilities. Host your own music library on S3-compatible storage and enjoy seamless offline playback across all your Apple devices.
 
-![Platform](https://img.shields.io/badge/platform-iOS%20%7C%20macOS%20%7C%20visionOS-blue)
+![Platform](https://img.shields.io/badge/platform-iOS%20%7C%20macOS-blue)
 ![Swift](https://img.shields.io/badge/Swift-5.9+-orange)
-![Python](https://img.shields.io/badge/Python-3.8+-green)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 
 ## Features
 
-A complete music streaming solution that puts you in control: host your own library on S3-compatible storage, enrich it with metadata from multiple sources, and enjoy seamless offline playback across all your Apple devices.
-
-### Frontend (iOS/macOS/visionOS App)
-
-#### Playback
+### Playback
 - Play, pause, skip forward/backward with smooth transitions
 - Repeat modes: off, repeat all, repeat one
 - Queue management with up next display
@@ -23,7 +18,7 @@ A complete music streaming solution that puts you in control: host your own libr
 - Background audio playback continues when app is minimized
 - System Now Playing integration (lock screen, Control Center, headphone controls)
 
-#### Smart Shuffle
+### Smart Shuffle
 Intelligent shuffle that learns your listening habits:
 - **Artist diversity**: Avoids same artist back-to-back (spreads across last 5 tracks)
 - **Album spread**: Prevents clustering of tracks from the same album
@@ -33,9 +28,9 @@ Intelligent shuffle that learns your listening habits:
 - **Mood matching**: Favors tracks with matching mood
 - **Skip learning**: Reduces weight for frequently skipped tracks
 - **Completion tracking**: Penalizes tracks you often don't finish
-- **Time-of-day patterns**: Learns what you listen to at different times (morning/afternoon/evening/night)
+- **Time-of-day patterns**: Learns what you listen to at different times
 
-#### Browsing & Discovery
+### Browsing & Discovery
 - **Artists View**: Browse all artists with grid or list layout toggle
 - **Albums View**: Browse all albums with grid or list layout toggle
 - **Songs View**: Full track listing with cache status indicators
@@ -44,7 +39,7 @@ Intelligent shuffle that learns your listening habits:
 - Artist detail pages with bio, albums, and track listings
 - Album detail pages with artwork, track listing, and metadata
 
-#### Offline & Caching
+### Offline & Caching
 - Download entire library for fully offline playback
 - Per-track download progress with cancel option
 - Cascading artwork caching (automatically downloads artist and album images)
@@ -53,11 +48,11 @@ Intelligent shuffle that learns your listening habits:
 - Cached tracks indicated with visual status icons
 - Non-cached tracks appear dimmed and disabled
 
-#### Search
+### Search
 - Global search across artists, albums, and songs
 - Real-time results as you type
 
-#### Statistics & Analytics
+### Statistics & Analytics
 - Play count tracking per track
 - CloudKit sync for statistics across devices
 - Listening time and unique tracks played
@@ -65,82 +60,58 @@ Intelligent shuffle that learns your listening habits:
 - Top Genres chart with listening breakdown
 - Time period filters: week, month, all time
 
-#### Now Playing Experience
-- **Full-screen sheet**: Large artwork, playback controls, progress slider
-- **iOS tab bar accessory**: Compact mini-player (iOS 18+)
-- **macOS/iPadOS sidebar**: Persistent player card in navigation sidebar
+### Cross-Device Sync
+- Upload music on macOS and it becomes available on iOS within seconds
+- Catalog syncs automatically via CDN and iCloud Key-Value storage
+- No manual configuration needed on iOS after initial macOS setup
 
-#### Platform-Specific
-- **iOS**: Tab-based navigation, iOS 18 tab bar accessories
+### Native Upload (macOS)
+- Built-in upload interface in the macOS app
+- Automatic metadata enrichment from TheAudioDB, MusicBrainz, and Last.fm
+- FLAC to M4A conversion via ffmpeg
+- Parallel uploads with progress tracking
+- Credentials stored securely in macOS Keychain
+
+### Platform-Specific
+- **iOS**: Tab-based navigation, iOS 18 tab bar mini-player
 - **macOS**: NavigationSplitView with three-column layout, sidebar player
-- **visionOS**: Spatial computing support
 - View mode preferences (grid/list) persist via `@AppStorage`
-
-### Backend (Python Upload & Metadata)
-
-#### Audio Format Support
-- Supported formats: MP3, M4A, FLAC, WAV, AAC
-- Automatic conversion to M4A (256kbps AAC) via ffmpeg
-- Lossless FLAC files converted while preserving quality
-- Embedded artwork extraction from audio file tags
-
-#### Metadata Enrichment
-- **TheAudioDB**: Artist bios, images, genres, styles, moods
-- **MusicBrainz**: Accurate artist/album identification via MBIDs
-- **Last.fm**: Fallback for album artwork and wiki when TheAudioDB lacks data
-- Album name correction to canonical names (e.g., "Hozier-DeLuxe-Version" → "Hozier")
-- Rich metadata fields: genre, style, mood, theme at artist, album, and track levels
-
-#### Upload & Catalog Generation
-- Parallel uploads with configurable worker count
-- Retry logic with exponential backoff for reliability
-- UUID-based filenames for artwork (prevents conflicts)
-- Hierarchical JSON catalog with streaming URLs
-- S3-compatible storage (DigitalOcean Spaces, AWS S3, MinIO, Cloudflare R2)
-- Dry-run mode for testing without uploading
-- Verbose output for debugging
 
 ## Prerequisites
 
-- **Python 3.8+** with pip
-- **ffmpeg** (for audio conversion)
-- **Xcode 15+** (for iOS/macOS app)
+- **Xcode 15+** (for building the app)
+- **ffmpeg** (for audio conversion during upload)
 - **S3-compatible storage** (DigitalOcean Spaces, AWS S3, MinIO, etc.)
 - **Optional API keys**: TheAudioDB (free), MusicBrainz contact email, Last.fm
 
+### Installing ffmpeg
+
+```bash
+# macOS (Homebrew)
+brew install ffmpeg
+```
+
 ## Getting Started
 
-### Backend Setup
+### macOS Setup (Upload)
 
-1. **Clone the repository**
+1. **Build and run the macOS app**
    ```bash
-   git clone https://github.com/yourusername/raven-swift-s3-music-player.git
-   cd raven-swift-s3-music-player
+   open frontend/Music.xcodeproj
+   # Select "My Mac" as destination and press Cmd+R
    ```
 
-2. **Create `.env` file in `backend/`**
-   ```env
-   # Required
-   DO_SPACES_KEY=your_access_key
-   DO_SPACES_SECRET=your_secret_key
-   DO_SPACES_BUCKET=your_bucket_name
+2. **Configure upload settings**
+   - Open the Upload tab in the sidebar
+   - Enter your DigitalOcean Spaces credentials:
+     - Access Key
+     - Secret Key
+     - Bucket name
+     - Region (e.g., sfo3, nyc3)
+     - Prefix (e.g., music)
+   - Optionally add API keys for metadata enrichment
 
-   # Optional
-   DO_SPACES_REGION=nyc3
-   DO_SPACES_PREFIX=music
-   MUSICBRAINZ_CONTACT=your@email.com
-   MUSICBRAINZ_ENABLED=true
-   LASTFM_API_KEY=your_lastfm_key
-   LASTFM_ENABLED=true
-   ```
-
-3. **Install dependencies**
-   ```bash
-   cd backend
-   pip install -r requirements.txt
-   ```
-
-4. **Organize your music**
+3. **Organize your music**
    ```
    music/
    ├── Artist Name/
@@ -150,118 +121,91 @@ Intelligent shuffle that learns your listening habits:
    │   │   └── ...
    ```
 
-5. **Run the uploader**
-   ```bash
-   python main.py
-   ```
+4. **Upload your library**
+   - Click "Select Folder" and choose your music directory
+   - Preview detected files (shows new vs existing)
+   - Click "Start Upload"
+   - The catalog is automatically uploaded to CDN and synced to iCloud
 
-### Frontend Setup
+### iOS Setup
 
-1. **Open the Xcode project**
+1. **Build and run the iOS app**
    ```bash
    open frontend/Music.xcodeproj
+   # Select an iOS Simulator or device and press Cmd+R
    ```
 
-2. **Update the CDN URL** in `frontend/Music/Services/MusicService.swift`:
-   ```swift
-   private let catalogBaseURL = "https://YOUR_BUCKET.YOUR_REGION.cdn.digitaloceanspaces.com/music/music_catalog.json"
-   ```
+2. **Catalog syncs automatically**
+   - Once you've uploaded music from macOS, iOS will detect the CDN settings via iCloud
+   - The catalog loads automatically on app launch
+   - Pull to refresh or return to the app to sync updates
 
-3. **Build and run** on simulator or device (Cmd+R)
+### Manual CDN Configuration (Optional)
 
-4. **Optional: iCloud sync** - For syncing listening statistics across devices, see [iCloud Setup Guide](docs/icloud-setup.md)
+If iCloud sync isn't working or you want to use a different catalog:
 
-## Configuration
+1. Open Settings in the iOS app
+2. Enter the CDN Prefix (e.g., `music`)
+3. The app will fetch the catalog from the configured CDN
 
-### Required Environment Variables
-
-| Variable | Description |
-|----------|-------------|
-| `DO_SPACES_KEY` | S3 access key |
-| `DO_SPACES_SECRET` | S3 secret key |
-| `DO_SPACES_BUCKET` | Bucket name |
-
-### Optional Environment Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `DO_SPACES_REGION` | `nyc3` | S3 region (nyc3, sfo3, ams3, sgp1, fra1, syd1, blr1) |
-| `DO_SPACES_ENDPOINT` | Auto | Custom S3 endpoint URL |
-| `DO_SPACES_PREFIX` | `music` | S3 path prefix for all files |
-| `MUSICBRAINZ_CONTACT` | - | Contact email for better rate limits |
-| `MUSICBRAINZ_ENABLED` | `true` | Enable MusicBrainz lookups |
-| `LASTFM_API_KEY` | - | Last.fm API key for fallback metadata |
-| `LASTFM_ENABLED` | `true` | Enable Last.fm fallback |
-
-## CLI Usage
+## Build Commands
 
 ```bash
-# Standard upload
-python backend/main.py
+# Build for iOS Simulator
+xcodebuild -project frontend/Music.xcodeproj -scheme Music \
+  -destination 'platform=iOS Simulator,name=iPhone 16' build
 
-# Dry run (scan only, no uploads)
-python backend/main.py --dry-run
+# Build for macOS
+xcodebuild -project frontend/Music.xcodeproj -scheme Music \
+  -destination 'platform=macOS' build
 
-# Verbose output
-python backend/main.py --verbose
-
-# Custom parallel workers
-python backend/main.py --workers 8
-
-# Combine options
-python backend/main.py --dry-run --verbose
+# Run tests
+xcodebuild -project frontend/Music.xcodeproj -scheme Music \
+  -destination 'platform=iOS Simulator,name=iPhone 16' test
 ```
 
 ## Project Structure
 
 ```
-raven-swift-s3-music-player/
-├── backend/
-│   ├── main.py                 # Entry point with MusicUploader orchestrator
-│   ├── config.py               # Configuration and environment loading
-│   ├── upload_music.py         # Backwards-compatible wrapper
-│   ├── services/
-│   │   ├── storage.py          # S3/Spaces uploads
-│   │   ├── theaudiodb.py       # TheAudioDB API
-│   │   ├── musicbrainz.py      # MusicBrainz MBID lookups
-│   │   └── lastfm.py           # Last.fm fallback
-│   ├── extractors/
-│   │   ├── metadata.py         # Audio tag extraction
-│   │   └── artwork.py          # Embedded artwork extraction
-│   ├── processors/
-│   │   ├── audio.py            # File scanning, ffmpeg conversion
-│   │   └── catalog.py          # Catalog JSON generation
-│   ├── models/
-│   │   ├── track.py            # TrackMetadata dataclass
-│   │   └── catalog.py          # Catalog dataclasses
-│   └── utils/
-│       ├── cache.py            # Thread-safe caching
-│       └── identifiers.py      # S3 key sanitization
+Music/
 ├── frontend/
 │   └── Music/
 │       ├── Models/
-│       │   ├── MusicCatalog.swift    # Codable models
-│       │   └── CacheModels.swift     # SwiftData cache models
+│       │   ├── CatalogModels.swift       # SwiftData: CatalogArtist, CatalogAlbum, CatalogTrack
+│       │   ├── MusicCatalog.swift        # Codable DTOs for JSON
+│       │   └── CacheModels.swift         # SwiftData: CachedTrack, CachedArtwork
 │       ├── Services/
-│       │   ├── MusicService.swift    # Catalog fetching
-│       │   ├── PlayerService.swift   # Audio playback
-│       │   ├── CacheService.swift    # Offline caching
-│       │   ├── ShuffleService.swift  # Smart shuffle with weighted selection
-│       │   ├── AnalyticsStore.swift  # Play/skip tracking with CloudKit
-│       │   └── StatisticsService.swift
+│       │   ├── MusicService.swift        # Catalog loading and CDN fetch
+│       │   ├── PlayerService.swift       # AVPlayer and Now Playing
+│       │   ├── CacheService.swift        # Track/artwork downloading
+│       │   ├── ShuffleService.swift      # Weighted random selection
+│       │   ├── AnalyticsStore.swift      # Core Data + CloudKit analytics
+│       │   └── Upload/                   # macOS-only upload services
+│       │       ├── MusicUploader.swift           # Main orchestrator
+│       │       ├── UploadConfiguration.swift     # Keychain storage
+│       │       ├── StorageService.swift          # S3 client
+│       │       ├── MetadataExtractor.swift       # AVFoundation tags
+│       │       ├── ArtworkExtractor.swift        # Embedded artwork
+│       │       ├── AudioConverter.swift          # ffmpeg conversion
+│       │       ├── CatalogBuilder.swift          # JSON generation
+│       │       ├── MusicBrainzService.swift      # MBID lookups
+│       │       ├── TheAudioDBService.swift       # Artist/album metadata
+│       │       └── LastFMService.swift           # Fallback metadata
 │       └── Views/
-│           ├── ContentView.swift
+│           ├── ContentView.swift                 # TabView / NavigationSplitView
 │           ├── ArtistsView.swift
 │           ├── AlbumsView.swift
 │           ├── SongsView.swift
 │           ├── NowPlayingSheet.swift
-│           └── SettingsView.swift
-├── music/                      # Your music library (Artist/Album/Track)
-├── tests/                      # Backend test suite
-└── CLAUDE.md                   # Development instructions
+│           ├── SettingsView.swift
+│           └── UploadView.swift                  # macOS-only
+├── screenshots/
+└── CLAUDE.md
 ```
 
 ## API Integrations
+
+These services are called natively from Swift during the upload process:
 
 | Service | Purpose | Rate Limit |
 |---------|---------|------------|
@@ -269,43 +213,26 @@ raven-swift-s3-music-player/
 | **MusicBrainz** | Accurate MBIDs for lookups | 1 req/sec (contact email improves limits) |
 | **Last.fm** | Fallback album artwork and wiki | API key required |
 
-## Testing
-
-```bash
-cd backend
-
-# Generate catalog first (required for integration tests)
-python main.py --dry-run
-
-# Run all tests
-python -m pytest tests/ -v
-
-# Run with coverage
-python -m pytest tests/ -v --cov=backend
-
-# Run specific test file
-python -m pytest tests/test_catalog.py -v
-```
-
 ## Catalog JSON Structure
 
-The backend generates a `music_catalog.json` file with this structure:
+The macOS app generates a `catalog.json` file with this structure:
 
 ```json
 {
-  "generated_at": "2024-01-15T10:30:00Z",
-  "total_tracks": 150,
   "artists": [
     {
       "name": "Artist Name",
       "bio": "Artist biography...",
       "image_url": "https://cdn.example.com/artist.jpg",
       "genre": "Alternative Rock",
+      "style": "Rock/Pop",
+      "mood": "Happy",
       "albums": [
         {
           "name": "Album Name",
           "image_url": "https://cdn.example.com/album.jpg",
           "release_date": 2020,
+          "genre": "Pop-Rock",
           "tracks": [
             {
               "title": "Track Title",
@@ -315,7 +242,9 @@ The backend generates a `music_catalog.json` file with this structure:
               "duration": 245,
               "format": "m4a",
               "url": "https://cdn.example.com/music/Artist/Album/Track.m4a",
-              "s3_key": "Artist/Album/Track.m4a"
+              "s3_key": "Artist/Album/Track.m4a",
+              "genre": "Pop-Rock",
+              "mood": "Relaxed"
             }
           ]
         }
@@ -326,8 +255,6 @@ The backend generates a `music_catalog.json` file with this structure:
 ```
 
 ## Screenshots
-
-<!-- Add your screenshots here -->
 
 | iOS | macOS |
 |-----|-------|
@@ -354,4 +281,3 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - [TheAudioDB](https://www.theaudiodb.com/) for artist and album metadata
 - [MusicBrainz](https://musicbrainz.org/) for accurate music identification
 - [Last.fm](https://www.last.fm/) for fallback metadata
-- [mutagen](https://mutagen.readthedocs.io/) for audio tag extraction

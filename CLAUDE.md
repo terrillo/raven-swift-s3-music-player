@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A unified Swift music app for iOS and macOS with integrated upload capabilities. The app supports **offline playback only** - tracks must be cached locally before they can be played. Music uploads are handled natively on macOS through a built-in upload interface.
 
+**Cross-device sync**: Music catalog syncs automatically across devices via CDN. Upload music on macOS and it becomes available on iOS within seconds.
+
 ## Build Commands
 
 ```bash
@@ -35,7 +37,7 @@ frontend/Music/
 │   ├── PlaybackState.swift
 │   └── ViewMode.swift
 ├── Services/
-│   ├── MusicService.swift        # Loads catalog from SwiftData
+│   ├── MusicService.swift        # Catalog loading: SwiftData + CDN fetch
 │   ├── PlayerService.swift       # AVPlayer, Now Playing, queue management
 │   ├── CacheService.swift        # Track/artwork download and caching
 │   ├── ShuffleService.swift      # Weighted random selection (9 factors)
@@ -100,7 +102,7 @@ struct MusicCatalog, Artist, Album, Track  // For JSON serialization
 
 ### Services
 
-**MusicService** - Loads catalog exclusively from SwiftData (no remote fetching). Consolidates artist variations and caches computed properties.
+**MusicService** - Loads catalog from SwiftData, fetches from CDN if local database is empty. Syncs iCloud Key-Value settings on each load to discover CDN configuration set by macOS uploader.
 
 **PlayerService** - AVPlayer-based playback with system Now Playing integration, queue management, and session tracking for smart shuffle.
 
@@ -129,6 +131,8 @@ The `Services/Upload/` directory contains the complete upload pipeline:
 3. Lookup corrections via TheAudioDB/MusicBrainz
 4. Upload to S3 with AWS Signature V4
 5. Build catalog and save to SwiftData
+6. Upload `catalog.json` to CDN for cross-device sync
+7. Save CDN settings to iCloud Key-Value store
 
 **StorageService** - S3-compatible client for DigitalOcean Spaces with AWS Signature V4 authentication.
 
@@ -165,6 +169,56 @@ The `Services/Upload/` directory contains the complete upload pipeline:
 - System Now Playing: lock screen, Control Center, headphone controls
 - Background audio playback supported
 
+## Cross-Device Sync
+
+The app uses a CDN-based sync architecture that enables music uploaded on macOS to appear on iOS automatically.
+
+### Architecture
+
+```
+┌─────────────┐     catalog.json      ┌─────────────┐
+│   macOS     │ ──────────────────▶   │     CDN     │
+│  Uploader   │                       │  (Spaces)   │
+└─────────────┘                       └─────────────┘
+       │                                     │
+       │  iCloud Key-Value                   │  fetch catalog.json
+       │  (cdnBaseURL, cdnPrefix)            │
+       ▼                                     ▼
+┌─────────────────────────────────────────────────┐
+│                 iOS / macOS                     │
+│              MusicService                       │
+│  1. Sync iCloud settings                        │
+│  2. Load from SwiftData                         │
+│  3. If empty → fetch from CDN                   │
+│  4. Save to SwiftData for offline access        │
+└─────────────────────────────────────────────────┘
+```
+
+### iCloud Key-Value Storage
+
+Settings synced via `NSUbiquitousKeyValueStore`:
+- `cdnBaseURL` - CDN base URL (e.g., `https://bucket.region.cdn.digitaloceanspaces.com`)
+- `cdnPrefix` - Path prefix (e.g., `music`)
+
+These are set automatically when:
+1. Uploading music on macOS (after catalog.json upload)
+2. Saving upload settings on macOS
+
+iOS reads these settings to construct the catalog URL: `{cdnBaseURL}/{cdnPrefix}/catalog.json`
+
+### Sync Triggers
+
+The catalog refreshes in these scenarios:
+
+1. **App launch** - Syncs iCloud settings, loads from SwiftData, fetches from CDN if empty
+2. **Foreground return** - `scenePhase` changes to `.active` triggers reload
+3. **Manual refresh** - Refresh button in empty state or macOS sidebar
+4. **After upload** - macOS immediately updates local SwiftData
+
+### Settings (iOS)
+
+The Settings view shows a "CDN Prefix" field that displays the current prefix synced from macOS. This is auto-synced and typically doesn't need manual changes. Users can override if needed (e.g., for multiple music libraries).
+
 ## Platform Features
 
 | Feature | iOS | macOS |
@@ -177,6 +231,7 @@ The `Services/Upload/` directory contains the complete upload pipeline:
 | Search | Yes | Yes |
 | Favorites | Yes | Yes |
 | Statistics | Yes | Yes |
+| Catalog Sync | Receive | Send |
 
 ## Upload Workflow (macOS)
 
@@ -184,8 +239,19 @@ The `Services/Upload/` directory contains the complete upload pipeline:
 2. Configure DigitalOcean Spaces credentials (stored in Keychain)
 3. Select music folder to scan
 4. Preview detected files (paginated table showing new vs existing)
-5. Start upload - files are uploaded with metadata enrichment
-6. Catalog is saved to SwiftData (available immediately for playback)
+5. Start upload:
+   - New files are uploaded with metadata enrichment
+   - `catalog.json` is uploaded to CDN
+   - CDN settings are synced to iCloud
+   - Catalog is saved to SwiftData (available immediately)
+
+### Rebuild Catalog
+
+When scanning a folder that has no new files to upload (all files already exist on remote), the upload preview shows a "Rebuild Catalog" button instead of "Start Upload". This:
+- Rebuilds the catalog from existing remote files
+- Re-uploads `catalog.json` to CDN
+- Syncs settings to iCloud
+- Useful after metadata corrections or when resetting the catalog
 
 ### Critical: s3_key Uses Corrected Album Name
 
@@ -210,6 +276,10 @@ Tracked via SwiftData (`CachedTrack`, `CachedArtwork` models).
 
 Audio and artwork served from: `https://terrillo.sfo3.cdn.digitaloceanspaces.com/music/`
 
+Default values in MusicService:
+- `defaultCDNBase` = `https://terrillo.sfo3.cdn.digitaloceanspaces.com`
+- `defaultCDNPrefix` = `music`
+
 ## Data Flow
 
 ```
@@ -218,7 +288,16 @@ macOS Upload:
      ↓
 StorageService (S3 upload)
      ↓
-CatalogBuilder → SwiftData (CatalogArtist/Album/Track)
+CatalogBuilder → catalog.json → CDN upload
+     ↓
+SwiftData (local) + iCloud Key-Value (cdnBaseURL, cdnPrefix)
+
+iOS/macOS Catalog Sync:
+iCloud Key-Value → MusicService.syncCloudSettings()
+     ↓
+SwiftData (check if empty) → CDN fetch if empty
+     ↓
+catalog.json → SwiftData (save for offline)
 
 iOS/macOS Playback:
 SwiftData → MusicService → UI
