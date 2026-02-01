@@ -19,7 +19,6 @@ class MusicService {
     private(set) var isUsingLocalDatabase = false
 
     private var modelContext: ModelContext?
-    private let catalogBaseURL = "https://terrillo.sfo3.cdn.digitaloceanspaces.com/music/music_catalog.json"
 
     // Cached computed properties for performance with large catalogs
     private var _cachedSongs: [Track]?
@@ -101,130 +100,34 @@ class MusicService {
         return result.trimmingCharacters(in: .whitespaces)
     }
 
+    /// Load catalog from SwiftData (iCloud-synced UploadedTrack records).
     func loadCatalog() async {
         guard !isLoading else { return }
-
-        isLoading = true
-        error = nil
-        isOffline = false
-        invalidateCaches()
-
-        // Add timestamp cache breaker to bypass CDN cache
-        let timestamp = Int(Date().timeIntervalSince1970)
-        guard let catalogURL = URL(string: "\(catalogBaseURL)?\(timestamp)") else {
-            self.error = URLError(.badURL)
+        guard let modelContext else {
+            print("[MusicService] Not configured with modelContext")
             isLoading = false
             return
         }
 
-        do {
-            let (data, _) = try await URLSession.shared.data(from: catalogURL)
-            let decoder = JSONDecoder()
-            let fetchedCatalog = try decoder.decode(MusicCatalog.self, from: data)
-            catalog = fetchedCatalog
-            lastUpdated = Date()
-
-            // Save to cache
-            await saveCatalogToCache(data: data, catalog: fetchedCatalog)
-        } catch {
-            // Check if this is actually a network unavailability error
-            let isNetworkUnavailable: Bool
-            if let urlError = error as? URLError {
-                isNetworkUnavailable = [
-                    .notConnectedToInternet,
-                    .networkConnectionLost,
-                    .dataNotAllowed,
-                    .internationalRoamingOff
-                ].contains(urlError.code)
-            } else {
-                isNetworkUnavailable = false
-            }
-
-            // Only fall back to cache and show offline mode for actual network unavailability
-            if isNetworkUnavailable {
-                if let cachedCatalog = await loadCatalogFromCache() {
-                    catalog = cachedCatalog
-                    isOffline = true
-                } else {
-                    self.error = error
-                    print("Failed to load catalog (offline, no cache): \(error)")
-                }
-            } else {
-                // Other errors (server errors, decoding errors, etc.) - keep existing catalog if available
-                if catalog == nil {
-                    if let cachedCatalog = await loadCatalogFromCache() {
-                        catalog = cachedCatalog
-                    } else {
-                        self.error = error
-                    }
-                }
-                print("Failed to refresh catalog: \(error)")
-            }
-        }
-
-        isLoading = false
-    }
-
-    private func saveCatalogToCache(data: Data, catalog: MusicCatalog) async {
-        guard let modelContext else { return }
-
-        // Delete existing cached catalog
-        let descriptor = FetchDescriptor<CachedCatalog>(
-            predicate: #Predicate { $0.id == "main" }
-        )
-        if let existing = try? modelContext.fetch(descriptor).first {
-            modelContext.delete(existing)
-        }
-
-        let cached = CachedCatalog(
-            catalogData: data,
-            totalTracks: catalog.totalTracks,
-            generatedAt: catalog.generatedAt
-        )
-        modelContext.insert(cached)
-        try? modelContext.save()
-    }
-
-    private func loadCatalogFromCache() async -> MusicCatalog? {
-        guard let modelContext else { return nil }
-
-        let descriptor = FetchDescriptor<CachedCatalog>(
-            predicate: #Predicate { $0.id == "main" }
-        )
-        guard let cached = try? modelContext.fetch(descriptor).first else { return nil }
-
-        let decoder = JSONDecoder()
-        lastUpdated = cached.cachedAt
-        return try? decoder.decode(MusicCatalog.self, from: cached.catalogData)
-    }
-
-    // MARK: - Build Catalog from SwiftData
-
-    /// Build a MusicCatalog from iCloud-synced UploadedTrack records.
-    /// This replaces the need for a JSON catalog file.
-    func loadCatalogFromDatabase() async {
-        guard !isLoading else { return }
-        guard let modelContext else { return }
-
         isLoading = true
         error = nil
         invalidateCaches()
 
         do {
-            // Fetch all uploaded tracks
+            // Fetch all uploaded tracks from SwiftData
             let trackDescriptor = FetchDescriptor<UploadedTrack>(
                 sortBy: [SortDescriptor(\.artist), SortDescriptor(\.album), SortDescriptor(\.trackNumber)]
             )
             let uploadedTracks = try modelContext.fetch(trackDescriptor)
 
-            // If no tracks in database, fall back to CDN catalog
             if uploadedTracks.isEmpty {
+                // No tracks yet - show empty state
+                catalog = MusicCatalog(artists: [], totalTracks: 0, generatedAt: ISO8601DateFormatter().string(from: Date()))
                 isLoading = false
-                await loadCatalog()
                 return
             }
 
-            // Fetch all artists and albums for metadata
+            // Fetch artist/album metadata
             let artistDescriptor = FetchDescriptor<UploadedArtist>()
             let uploadedArtists = try modelContext.fetch(artistDescriptor)
             let artistMap = Dictionary(uniqueKeysWithValues: uploadedArtists.map { ($0.id, $0) })
@@ -233,20 +136,16 @@ class MusicService {
             let uploadedAlbums = try modelContext.fetch(albumDescriptor)
             let albumMap = Dictionary(uniqueKeysWithValues: uploadedAlbums.map { ($0.id, $0) })
 
-            // Build catalog structure
-            let catalog = buildCatalog(
-                from: uploadedTracks,
-                artistMap: artistMap,
-                albumMap: albumMap
-            )
+            // Build catalog from SwiftData
+            catalog = buildCatalog(from: uploadedTracks, artistMap: artistMap, albumMap: albumMap)
+            lastUpdated = uploadedTracks.map(\.uploadedAt).max()
+            isUsingLocalDatabase = true
 
-            self.catalog = catalog
-            self.lastUpdated = uploadedTracks.map(\.uploadedAt).max()
-            self.isUsingLocalDatabase = true
+            print("[MusicService] Loaded \(uploadedTracks.count) tracks from SwiftData")
 
         } catch {
             self.error = error
-            print("Failed to load catalog from database: \(error)")
+            print("[MusicService] Failed to load catalog from database: \(error)")
         }
 
         isLoading = false
@@ -321,9 +220,13 @@ class MusicService {
                     )
                 }
 
+                // Fallback: album artwork → first track's embedded artwork
+                let albumImageUrl = uploadedAlbum?.imageUrl
+                    ?? trackArray.first?.embeddedArtworkUrl
+
                 let album = Album(
                     name: albumName,
-                    imageUrl: uploadedAlbum?.imageUrl,
+                    imageUrl: albumImageUrl,
                     wiki: uploadedAlbum?.wiki,
                     releaseDate: uploadedAlbum?.releaseDate,
                     genre: uploadedAlbum?.genre,
@@ -340,9 +243,13 @@ class MusicService {
                 albumArray.append(album)
             }
 
+            // Fallback: artist image → first album's artwork
+            let artistImageUrl = uploadedArtist?.imageUrl
+                ?? albumArray.first?.imageUrl
+
             let artist = Artist(
                 name: artistName,
-                imageUrl: uploadedArtist?.imageUrl,
+                imageUrl: artistImageUrl,
                 bio: uploadedArtist?.bio,
                 genre: uploadedArtist?.genre,
                 style: uploadedArtist?.style,
@@ -364,21 +271,8 @@ class MusicService {
         )
     }
 
-    /// Refresh catalog, preferring database if available, falling back to CDN
+    /// Refresh catalog from SwiftData.
     func refreshCatalog() async {
-        guard let modelContext else {
-            await loadCatalog()
-            return
-        }
-
-        // Check if we have any uploaded tracks
-        let descriptor = FetchDescriptor<UploadedTrack>()
-        let count = (try? modelContext.fetchCount(descriptor)) ?? 0
-
-        if count > 0 {
-            await loadCatalogFromDatabase()
-        } else {
-            await loadCatalog()
-        }
+        await loadCatalog()
     }
 }

@@ -18,8 +18,17 @@ struct ArtworkImage: View {
     var cacheService: CacheService? = nil
     var isCircular: Bool = false
 
+    // Environment cache service for auto-caching (used when cacheService param is nil)
+    @Environment(CacheService.self) private var envCacheService: CacheService?
+    @AppStorage("autoCacheArtwork") private var autoCacheArtwork = true
+
     @State private var cachedLocalURL: URL? = nil
     @State private var hasTriggeredDownload = false
+
+    /// The effective cache service (explicit param or environment)
+    private var effectiveCacheService: CacheService? {
+        cacheService ?? envCacheService
+    }
 
     private var clipShape: AnyShape {
         isCircular ? AnyShape(Circle()) : AnyShape(RoundedRectangle(cornerRadius: 8))
@@ -42,14 +51,31 @@ struct ArtworkImage: View {
                     .clipShape(clipShape)
                 #endif
             } else if let urlString = url, let imageUrl = URL(string: urlString) {
-                if let cacheService = cacheService {
-                    // Cache service available - trigger download and show placeholder
-                    placeholderView
-                        .onAppear {
-                            triggerCacheDownload(urlString: urlString, cacheService: cacheService)
+                // Use caching when: explicit cacheService OR (auto-cache enabled AND env service available)
+                if let cache = effectiveCacheService, (cacheService != nil || autoCacheArtwork) {
+                    // Cache service available - trigger download and show AsyncImage while loading
+                    AsyncImage(url: imageUrl) { phase in
+                        switch phase {
+                        case .empty:
+                            ProgressView()
+                                .frame(width: size, height: size)
+                        case .success(let image):
+                            image
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                                .frame(width: size, height: size)
+                                .clipShape(clipShape)
+                        case .failure:
+                            placeholderView
+                        @unknown default:
+                            placeholderView
                         }
+                    }
+                    .onAppear {
+                        triggerCacheDownload(urlString: urlString, cacheService: cache)
+                    }
                 } else {
-                    // No cache service - use AsyncImage directly
+                    // No cache service or auto-cache disabled - use AsyncImage only
                     AsyncImage(url: imageUrl) { phase in
                         switch phase {
                         case .empty:

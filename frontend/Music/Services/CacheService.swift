@@ -154,6 +154,55 @@ class CacheService {
         return (try? modelContext.fetchCount(descriptor)) ?? 0
     }
 
+    // MARK: - Artwork Cache Size
+
+    func getArtworkCacheSize() -> Int64 {
+        guard FileManager.default.fileExists(atPath: artworkDirectory.path) else { return 0 }
+
+        let files = try? FileManager.default.contentsOfDirectory(
+            at: artworkDirectory,
+            includingPropertiesForKeys: [.fileSizeKey]
+        )
+        return files?.reduce(0) { total, url in
+            let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+            return total + Int64(size)
+        } ?? 0
+    }
+
+    func formattedArtworkCacheSize() -> String {
+        let bytes = getArtworkCacheSize()
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .file
+        return formatter.string(fromByteCount: bytes)
+    }
+
+    func cachedArtworkCount() -> Int {
+        let descriptor = FetchDescriptor<CachedArtwork>()
+        return (try? modelContext.fetchCount(descriptor)) ?? 0
+    }
+
+    func clearArtworkCache() async {
+        do {
+            // Delete artwork files
+            if FileManager.default.fileExists(atPath: artworkDirectory.path) {
+                try FileManager.default.removeItem(at: artworkDirectory)
+            }
+
+            // Delete artwork database records
+            let descriptor = FetchDescriptor<CachedArtwork>()
+            let artwork = try modelContext.fetch(descriptor)
+            for art in artwork {
+                modelContext.delete(art)
+            }
+            try modelContext.save()
+
+            // Clear in-memory cache
+            cachedArtworkUrls.removeAll()
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
     // MARK: - Download All
 
     // Increased for better throughput - network I/O is the bottleneck, not CPU

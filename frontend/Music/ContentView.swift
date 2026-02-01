@@ -46,6 +46,56 @@ struct ContentView: View {
     @State private var pendingNavigation: NavigationDestination? = nil
 
     var body: some View {
+        Group {
+            if let cache = cacheService {
+                mainContent
+                    .environment(cache)
+            } else {
+                // Loading state while cacheService initializes
+                ProgressView("Loading...")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .onAppear {
+            // Initialize cacheService synchronously on first appear
+            if cacheService == nil {
+                cacheService = CacheService(modelContext: modelContext)
+                playerService.cacheService = cacheService
+            }
+        }
+        .task {
+            musicService.configure(modelContext: modelContext)
+            await musicService.loadCatalog()
+            // Sync initial online status
+            playerService.isOnline = !musicService.isOffline
+            // Restore playback state after catalog loads
+            if musicService.catalog != nil {
+                playerService.restorePlaybackState(from: musicService)
+            }
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            if newPhase == .background {
+                playerService.savePlaybackState()
+            }
+        }
+        .onChange(of: musicService.isOffline) { _, isOffline in
+            playerService.isOnline = !isOffline
+        }
+        .alert("Unable to Load Music", isPresented: .constant(musicService.error != nil)) {
+            Button("Retry") {
+                musicService.error = nil
+                Task { await musicService.loadCatalog() }
+            }
+            Button("OK", role: .cancel) {
+                musicService.error = nil
+            }
+        } message: {
+            Text(musicService.error?.localizedDescription ?? "An unknown error occurred")
+        }
+    }
+
+    @ViewBuilder
+    private var mainContent: some View {
         VStack(spacing: 0) {
             // Offline banner
             if musicService.isOffline {
@@ -161,39 +211,6 @@ struct ContentView: View {
             }
             #endif
             }
-        }
-        .task {
-            if cacheService == nil {
-                cacheService = CacheService(modelContext: modelContext)
-                playerService.cacheService = cacheService
-            }
-            musicService.configure(modelContext: modelContext)
-            await musicService.loadCatalog()
-            // Sync initial online status
-            playerService.isOnline = !musicService.isOffline
-            // Restore playback state after catalog loads
-            if musicService.catalog != nil {
-                playerService.restorePlaybackState(from: musicService)
-            }
-        }
-        .onChange(of: scenePhase) { _, newPhase in
-            if newPhase == .background {
-                playerService.savePlaybackState()
-            }
-        }
-        .onChange(of: musicService.isOffline) { _, isOffline in
-            playerService.isOnline = !isOffline
-        }
-        .alert("Unable to Load Music", isPresented: .constant(musicService.error != nil)) {
-            Button("Retry") {
-                musicService.error = nil
-                Task { await musicService.loadCatalog() }
-            }
-            Button("OK", role: .cancel) {
-                musicService.error = nil
-            }
-        } message: {
-            Text(musicService.error?.localizedDescription ?? "An unknown error occurred")
         }
     }
 }

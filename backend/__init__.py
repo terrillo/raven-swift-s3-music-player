@@ -1,1 +1,0 @@
-"""Music upload backend package."""

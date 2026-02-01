@@ -12,8 +12,10 @@ struct SettingsView: View {
     var musicService: MusicService
 
     @AppStorage("streamingModeEnabled") private var streamingModeEnabled = false
+    @AppStorage("autoCacheArtwork") private var autoCacheArtwork = true
     @State private var showingCacheSheet = false
     @State private var showingClearConfirmation = false
+    @State private var showingClearArtworkConfirmation = false
     @State private var showingDeleteAllConfirmation = false
 
     var body: some View {
@@ -87,6 +89,41 @@ struct SettingsView: View {
                     }
                 }
 
+                Section("Images") {
+                    Toggle(isOn: $autoCacheArtwork) {
+                        Label {
+                            VStack(alignment: .leading) {
+                                Text("Auto-Cache Artwork")
+                                Text("Save images when browsing")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        } icon: {
+                            Image(systemName: "photo.on.rectangle")
+                        }
+                    }
+
+                    HStack {
+                        Label("Cached Images", systemImage: "photo.stack")
+                        Spacer()
+                        Text("\(cacheService.cachedArtworkCount())")
+                            .foregroundStyle(.secondary)
+                    }
+
+                    HStack {
+                        Label("Artwork Size", systemImage: "square.stack.3d.up")
+                        Spacer()
+                        Text(cacheService.formattedArtworkCacheSize())
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Button(role: .destructive) {
+                        showingClearArtworkConfirmation = true
+                    } label: {
+                        Label("Clear Artwork Cache", systemImage: "trash")
+                    }
+                }
+
                 Section {
                     Button(role: .destructive) {
                         showingDeleteAllConfirmation = true
@@ -126,6 +163,16 @@ struct SettingsView: View {
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text("This will delete all cached music and artwork. You'll need to download them again for offline playback.")
+            }
+            .confirmationDialog("Clear Artwork Cache", isPresented: $showingClearArtworkConfirmation) {
+                Button("Clear Artwork", role: .destructive) {
+                    Task {
+                        await cacheService.clearArtworkCache()
+                    }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This will delete all cached artwork images. They will be re-downloaded as you browse.")
             }
             .confirmationDialog("Delete All Data", isPresented: $showingDeleteAllConfirmation) {
                 Button("Delete All Data", role: .destructive) {
