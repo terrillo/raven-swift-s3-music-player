@@ -15,8 +15,10 @@ class MusicService {
     private(set) var isOffline = false
     private(set) var lastUpdated: Date?
 
+    /// Whether catalog was built from iCloud-synced SwiftData records
+    private(set) var isUsingLocalDatabase = false
+
     private var modelContext: ModelContext?
-    private let catalogBaseURL = "https://terrillo.sfo3.cdn.digitaloceanspaces.com/music/music_catalog.json"
 
     // Cached computed properties for performance with large catalogs
     private var _cachedSongs: [Track]?
@@ -98,100 +100,228 @@ class MusicService {
         return result.trimmingCharacters(in: .whitespaces)
     }
 
+    /// Load catalog from SwiftData (iCloud-synced UploadedTrack records).
     func loadCatalog() async {
         guard !isLoading else { return }
-
-        isLoading = true
-        error = nil
-        isOffline = false
-        invalidateCaches()
-
-        // Add timestamp cache breaker to bypass CDN cache
-        let timestamp = Int(Date().timeIntervalSince1970)
-        guard let catalogURL = URL(string: "\(catalogBaseURL)?\(timestamp)") else {
-            self.error = URLError(.badURL)
+        guard let modelContext else {
+            print("[MusicService] Not configured with modelContext")
             isLoading = false
             return
         }
 
+        isLoading = true
+        error = nil
+        invalidateCaches()
+
         do {
-            let (data, _) = try await URLSession.shared.data(from: catalogURL)
-            let decoder = JSONDecoder()
-            let fetchedCatalog = try decoder.decode(MusicCatalog.self, from: data)
-            catalog = fetchedCatalog
-            lastUpdated = Date()
+            // Fetch all uploaded tracks from SwiftData
+            let trackDescriptor = FetchDescriptor<UploadedTrack>(
+                sortBy: [SortDescriptor(\.artist), SortDescriptor(\.album), SortDescriptor(\.trackNumber)]
+            )
+            let uploadedTracks = try modelContext.fetch(trackDescriptor)
 
-            // Save to cache
-            await saveCatalogToCache(data: data, catalog: fetchedCatalog)
+            if uploadedTracks.isEmpty {
+                // No tracks yet - show empty state
+                catalog = MusicCatalog(artists: [], totalTracks: 0, generatedAt: ISO8601DateFormatter().string(from: Date()))
+                isLoading = false
+                return
+            }
+
+            // Fetch artist/album metadata
+            let artistDescriptor = FetchDescriptor<UploadedArtist>()
+            let uploadedArtists = try modelContext.fetch(artistDescriptor)
+            let artistMap = Dictionary(uniqueKeysWithValues: uploadedArtists.map { ($0.id, $0) })
+
+            let albumDescriptor = FetchDescriptor<UploadedAlbum>()
+            let uploadedAlbums = try modelContext.fetch(albumDescriptor)
+            let albumMap = Dictionary(uniqueKeysWithValues: uploadedAlbums.map { ($0.id, $0) })
+
+            // Build catalog from SwiftData
+            catalog = buildCatalog(from: uploadedTracks, artistMap: artistMap, albumMap: albumMap)
+            lastUpdated = uploadedTracks.map(\.uploadedAt).max()
+            isUsingLocalDatabase = true
+
+            print("[MusicService] Loaded \(uploadedTracks.count) tracks from SwiftData")
+
         } catch {
-            // Check if this is actually a network unavailability error
-            let isNetworkUnavailable: Bool
-            if let urlError = error as? URLError {
-                isNetworkUnavailable = [
-                    .notConnectedToInternet,
-                    .networkConnectionLost,
-                    .dataNotAllowed,
-                    .internationalRoamingOff
-                ].contains(urlError.code)
-            } else {
-                isNetworkUnavailable = false
-            }
-
-            // Only fall back to cache and show offline mode for actual network unavailability
-            if isNetworkUnavailable {
-                if let cachedCatalog = await loadCatalogFromCache() {
-                    catalog = cachedCatalog
-                    isOffline = true
-                } else {
-                    self.error = error
-                    print("Failed to load catalog (offline, no cache): \(error)")
-                }
-            } else {
-                // Other errors (server errors, decoding errors, etc.) - keep existing catalog if available
-                if catalog == nil {
-                    if let cachedCatalog = await loadCatalogFromCache() {
-                        catalog = cachedCatalog
-                    } else {
-                        self.error = error
-                    }
-                }
-                print("Failed to refresh catalog: \(error)")
-            }
+            self.error = error
+            print("[MusicService] Failed to load catalog from database: \(error)")
         }
 
         isLoading = false
     }
 
-    private func saveCatalogToCache(data: Data, catalog: MusicCatalog) async {
-        guard let modelContext else { return }
+    private func buildCatalog(
+        from tracks: [UploadedTrack],
+        artistMap: [String: UploadedArtist],
+        albumMap: [String: UploadedAlbum]
+    ) -> MusicCatalog {
+        // Group tracks by artist -> album
+        var artistAlbums: [String: [String: [UploadedTrack]]] = [:]
 
-        // Delete existing cached catalog
-        let descriptor = FetchDescriptor<CachedCatalog>(
-            predicate: #Predicate { $0.id == "main" }
-        )
-        if let existing = try? modelContext.fetch(descriptor).first {
-            modelContext.delete(existing)
+        for track in tracks {
+            let artistKey = track.uploadedArtistId ?? UploadIdentifiers.artistId(track.artist ?? "Unknown Artist")
+            let albumKey = track.uploadedAlbumId ?? UploadIdentifiers.albumId(
+                artist: track.artist ?? "Unknown Artist",
+                album: track.album ?? "Unknown Album"
+            )
+
+            if artistAlbums[artistKey] == nil {
+                artistAlbums[artistKey] = [:]
+            }
+            if artistAlbums[artistKey]![albumKey] == nil {
+                artistAlbums[artistKey]![albumKey] = []
+            }
+            artistAlbums[artistKey]![albumKey]!.append(track)
         }
 
-        let cached = CachedCatalog(
-            catalogData: data,
-            totalTracks: catalog.totalTracks,
-            generatedAt: catalog.generatedAt
+        // Build Artist array
+        var artists: [Artist] = []
+
+        for (artistId, albums) in artistAlbums.sorted(by: { $0.key < $1.key }) {
+            let uploadedArtist = artistMap[artistId]
+            let artistName = uploadedArtist?.name ?? artistId.replacingOccurrences(of: "-", with: " ")
+
+            var albumArray: [Album] = []
+            for (albumId, albumTracks) in albums.sorted(by: { $0.key < $1.key }) {
+                let uploadedAlbum = albumMap[albumId]
+                let albumName = uploadedAlbum?.name ?? albumId.components(separatedBy: "/").last ?? "Unknown Album"
+
+                // Get album artwork URL for tracks to use as fallback
+                let albumImageUrl = uploadedAlbum?.imageUrl
+
+                // Build Track array
+                let trackArray = albumTracks.sorted {
+                    ($0.discNumber ?? 1, $0.trackNumber ?? 0) < ($1.discNumber ?? 1, $1.trackNumber ?? 0)
+                }.map { track in
+                    Track(
+                        title: track.title,
+                        artist: track.artist,
+                        album: track.album,
+                        trackNumber: track.trackNumber,
+                        duration: track.duration,
+                        format: track.format,
+                        s3Key: track.s3Key,
+                        url: track.url,
+                        embeddedArtworkUrl: track.embeddedArtworkUrl,
+                        albumArtworkUrl: albumImageUrl,  // Fallback for songs without embedded art
+                        genre: track.genre,
+                        style: track.style,
+                        mood: track.mood,
+                        theme: track.theme,
+                        albumArtist: track.albumArtist,
+                        trackTotal: track.trackTotal,
+                        discNumber: track.discNumber,
+                        discTotal: track.discTotal,
+                        year: track.year,
+                        composer: track.composer,
+                        comment: track.comment,
+                        bitrate: track.bitrate,
+                        samplerate: track.samplerate,
+                        channels: track.channels,
+                        filesize: track.filesize,
+                        originalFormat: track.originalFormat
+                    )
+                }
+
+                // Fallback: album artwork → first track's embedded artwork (for album display)
+                let finalAlbumImageUrl = albumImageUrl
+                    ?? trackArray.first?.embeddedArtworkUrl
+
+                let album = Album(
+                    name: albumName,
+                    imageUrl: finalAlbumImageUrl,
+                    wiki: uploadedAlbum?.wiki,
+                    releaseDate: uploadedAlbum?.releaseDate,
+                    genre: uploadedAlbum?.genre,
+                    style: uploadedAlbum?.style,
+                    mood: uploadedAlbum?.mood,
+                    theme: uploadedAlbum?.theme,
+                    tracks: trackArray,
+                    releaseType: uploadedAlbum?.releaseType,
+                    country: uploadedAlbum?.country,
+                    label: uploadedAlbum?.label,
+                    barcode: uploadedAlbum?.barcode,
+                    mediaFormat: uploadedAlbum?.mediaFormat
+                )
+                albumArray.append(album)
+            }
+
+            // Fallback: artist image → first album's artwork
+            let artistImageUrl = uploadedArtist?.imageUrl
+                ?? albumArray.first?.imageUrl
+
+            let artist = Artist(
+                name: artistName,
+                imageUrl: artistImageUrl,
+                bio: uploadedArtist?.bio,
+                genre: uploadedArtist?.genre,
+                style: uploadedArtist?.style,
+                mood: uploadedArtist?.mood,
+                albums: albumArray,
+                artistType: uploadedArtist?.artistType,
+                area: uploadedArtist?.area,
+                beginDate: uploadedArtist?.beginDate,
+                endDate: uploadedArtist?.endDate,
+                disambiguation: uploadedArtist?.disambiguation
+            )
+            artists.append(artist)
+        }
+
+        return MusicCatalog(
+            artists: artists,
+            totalTracks: tracks.count,
+            generatedAt: ISO8601DateFormatter().string(from: Date())
         )
-        modelContext.insert(cached)
-        try? modelContext.save()
     }
 
-    private func loadCatalogFromCache() async -> MusicCatalog? {
-        guard let modelContext else { return nil }
+    /// Refresh catalog from SwiftData.
+    func refreshCatalog() async {
+        await loadCatalog()
+    }
 
-        let descriptor = FetchDescriptor<CachedCatalog>(
-            predicate: #Predicate { $0.id == "main" }
-        )
-        guard let cached = try? modelContext.fetch(descriptor).first else { return nil }
+    // MARK: - Clear All Data
 
-        let decoder = JSONDecoder()
-        lastUpdated = cached.cachedAt
-        return try? decoder.decode(MusicCatalog.self, from: cached.catalogData)
+    /// Deletes all iCloud-synced catalog data and clears in-memory state.
+    func clearAllData() async {
+        guard let modelContext else {
+            print("[MusicService] No modelContext for clearing data")
+            return
+        }
+
+        do {
+            // Delete all UploadedTrack records
+            let trackDescriptor = FetchDescriptor<UploadedTrack>()
+            let tracks = try modelContext.fetch(trackDescriptor)
+            for track in tracks {
+                modelContext.delete(track)
+            }
+
+            // Delete all UploadedArtist records
+            let artistDescriptor = FetchDescriptor<UploadedArtist>()
+            let artists = try modelContext.fetch(artistDescriptor)
+            for artist in artists {
+                modelContext.delete(artist)
+            }
+
+            // Delete all UploadedAlbum records
+            let albumDescriptor = FetchDescriptor<UploadedAlbum>()
+            let albums = try modelContext.fetch(albumDescriptor)
+            for album in albums {
+                modelContext.delete(album)
+            }
+
+            try modelContext.save()
+
+            // Clear in-memory state
+            catalog = nil
+            invalidateCaches()
+            lastUpdated = nil
+            isUsingLocalDatabase = false
+
+            print("[MusicService] All data cleared successfully")
+        } catch {
+            print("[MusicService] Failed to clear data: \(error)")
+        }
     }
 }

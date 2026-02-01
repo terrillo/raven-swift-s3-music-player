@@ -73,6 +73,7 @@ python -m pytest tests/ -v --cov=backend
 **Models/**
 - `MusicCatalog.swift` - Codable models: `MusicCatalog`, `Artist`, `Album`, `Track`
 - `CacheModels.swift` - SwiftData models: `CachedTrack`, `CachedArtwork`, `CachedCatalog` for offline storage tracking
+- `UploadModels.swift` - SwiftData models for upload state: `UploadedTrack`, `UploadedArtist`, `UploadedAlbum`, plus `UploadIdentifiers` utilities
 
 **Services/**
 - `MusicService.swift` - Fetches catalog JSON from CDN (with cache-busting timestamp), provides artists/albums/songs arrays, supports offline catalog caching
@@ -80,6 +81,11 @@ python -m pytest tests/ -v --cov=backend
 - `CacheService.swift` - Downloads and caches music/artwork for offline playback using SwiftData, cascading artwork caching for artists/albums
 - `ShuffleService.swift` - Weighted random track selection with 9 intelligence factors for smart shuffle
 - `AnalyticsStore.swift` - Core Data + CloudKit analytics with play counts, skip tracking, completion rates, and time-of-day preferences
+- `UploadService.swift` - **(macOS only)** Orchestrates upload workflow: scan, extract metadata, API lookups, convert FLAC→M4A, upload to S3
+- `S3Service.swift` - **(macOS only)** DigitalOcean Spaces operations with AWS Signature V4, multipart uploads, image validation
+- `MetadataService.swift` - **(macOS only)** AVFoundation-based metadata extraction from audio files
+- `AudioConversionService.swift` - **(macOS only)** FLAC/WAV to M4A conversion using AVAssetExportSession with ffmpeg fallback
+- `APIServices.swift` - **(macOS only)** Swift ports of TheAudioDB, MusicBrainz, Last.fm services with rate limiting and caching
 
 **Views/**
 - `ContentView.swift` - Main view with TabView (iOS) or NavigationSplitView (macOS), offline mode banner
@@ -92,6 +98,7 @@ python -m pytest tests/ -v --cov=backend
 - `SettingsView.swift` - Cache management (download all, clear cache, cache size)
 - `CacheDownloadView.swift` - Modal with per-track download progress, passes catalog for cascading artwork
 - `PlaylistView.swift`, `SearchView.swift` - Placeholder views
+- `UploadView.swift` - **(macOS only)** Upload interface with folder selection, S3 credentials, prepare/upload workflow
 
 **Key Patterns:**
 - Uses `@Observable` macro for services (requires iOS 17+)
@@ -127,6 +134,32 @@ Key files:
 - `PlayerService.swift` - Session tracking (`sessionPlayedKeys`, `recentArtists`, `recentAlbums`)
 - `AnalyticsStore.swift` - Query methods: `fetchLastPlayDates()`, `fetchCompletionRates()`, `fetchTimeOfDayPreferences()`
 - `MusicDB.xcdatamodeld` - `PlayEventEntity` includes `completionRate` attribute
+
+**Frontend Upload System (macOS only):**
+
+The macOS app includes a full upload system that mirrors the Python backend functionality:
+
+1. **Workflow**: Scan folder → Extract metadata → Fetch API corrections → Convert FLAC→M4A → Upload to S3
+2. **S3 Key Generation**: Uses `UploadIdentifiers.sanitizeS3Key()` to create clean keys (A-Z, a-z, 0-9, dashes only)
+3. **Artwork Upload**: Artist photos (`Artist/artist.jpg`), album covers (`Artist/Album/cover.jpg`), embedded art (`Artist/Album/embedded.jpg`)
+4. **Deduplication**: Tracks already in S3 are skipped; tracks with same S3 key after album name correction are deduplicated
+
+**Tidal Metadata Cleaning** (`UploadIdentifiers` in `UploadModels.swift`):
+
+Tidal downloads have messy metadata that needs cleaning before S3 key generation:
+
+| Function | Input | Output |
+|----------|-------|--------|
+| `cleanAlbumName()` | `[E]  Do What Thou Wilt [67884317] [2016]` | `Do What Thou Wilt` |
+| `cleanTrackTitle()` | `01 - Ab-Soul - RAW (backwards)(Explicit)` | `RAW (backwards)` |
+| `cleanTidalFolderName()` | `[E]  Album Name [123] [2024]` | `Album Name` |
+| `extractFromFolderPath()` | Extracts artist/album from folder structure when metadata is missing |
+
+**Folder Structure Fallback:**
+
+When AVFoundation cannot read FLAC metadata (common with Tidal downloads), the system extracts artist/album from folder paths:
+- Scanning from artist folder (`/Tidal/Ab-Soul/`): Uses folder name as artist, subfolder as album
+- Scanning from music root (`/Tidal/`): Uses `Artist/Album/Track.flac` structure
 
 ### Backend (`backend/`)
 

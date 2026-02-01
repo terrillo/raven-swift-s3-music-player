@@ -1,6 +1,0 @@
-boto3
-python-dotenv
-mutagen
-tinytag
-tqdm
-requests

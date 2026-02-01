@@ -10,17 +10,48 @@ import SwiftData
 
 @main
 struct MusicApp: App {
-    // Local-only container for cache tracking (device-specific, SwiftData)
+    // Combined container with local cache and iCloud-synced upload models
     var sharedModelContainer: ModelContainer = {
-        let schema = Schema([Item.self, CachedTrack.self, CachedArtwork.self, CachedCatalog.self])
-        let config = ModelConfiguration(
+        // Local-only models (device-specific cache)
+        let localSchema = Schema([
+            Item.self,
+            CachedTrack.self,
+            CachedArtwork.self,
+            CachedCatalog.self
+        ])
+        let localConfig = ModelConfiguration(
             "LocalCache",
-            schema: schema,
+            schema: localSchema,
             isStoredInMemoryOnly: false,
             cloudKitDatabase: .none
         )
+
+        // iCloud-synced models (upload state shared across devices)
+        let cloudSchema = Schema([
+            UploadedTrack.self,
+            UploadedArtist.self,
+            UploadedAlbum.self
+        ])
+        let cloudConfig = ModelConfiguration(
+            "CloudSync",
+            schema: cloudSchema,
+            isStoredInMemoryOnly: false,
+            cloudKitDatabase: .automatic
+        )
+
+        // Combined schema for the container
+        let fullSchema = Schema([
+            Item.self,
+            CachedTrack.self,
+            CachedArtwork.self,
+            CachedCatalog.self,
+            UploadedTrack.self,
+            UploadedArtist.self,
+            UploadedAlbum.self
+        ])
+
         do {
-            return try ModelContainer(for: schema, configurations: [config])
+            return try ModelContainer(for: fullSchema, configurations: [localConfig, cloudConfig])
         } catch {
             fatalError("Could not create ModelContainer: \(error)")
         }

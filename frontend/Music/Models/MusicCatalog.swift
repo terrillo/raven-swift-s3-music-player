@@ -15,6 +15,12 @@ struct MusicCatalog: Codable {
         case totalTracks = "total_tracks"
         case generatedAt = "generated_at"
     }
+
+    init(artists: [Artist], totalTracks: Int, generatedAt: String) {
+        self.artists = artists
+        self.totalTracks = totalTracks
+        self.generatedAt = generatedAt
+    }
 }
 
 struct Artist: Codable, Identifiable, Hashable {
@@ -49,6 +55,34 @@ struct Artist: Codable, Identifiable, Hashable {
         case artistType = "artist_type"
         case beginDate = "begin_date"
         case endDate = "end_date"
+    }
+
+    init(
+        name: String,
+        imageUrl: String? = nil,
+        bio: String? = nil,
+        genre: String? = nil,
+        style: String? = nil,
+        mood: String? = nil,
+        albums: [Album],
+        artistType: String? = nil,
+        area: String? = nil,
+        beginDate: String? = nil,
+        endDate: String? = nil,
+        disambiguation: String? = nil
+    ) {
+        self.name = name
+        self.imageUrl = imageUrl
+        self.bio = bio
+        self.genre = genre
+        self.style = style
+        self.mood = mood
+        self.albums = albums
+        self.artistType = artistType
+        self.area = area
+        self.beginDate = beginDate
+        self.endDate = endDate
+        self.disambiguation = disambiguation
     }
 }
 
@@ -89,6 +123,38 @@ struct Album: Codable, Identifiable, Hashable {
         case releaseType = "release_type"
         case mediaFormat = "media_format"
     }
+
+    init(
+        name: String,
+        imageUrl: String? = nil,
+        wiki: String? = nil,
+        releaseDate: Int? = nil,
+        genre: String? = nil,
+        style: String? = nil,
+        mood: String? = nil,
+        theme: String? = nil,
+        tracks: [Track],
+        releaseType: String? = nil,
+        country: String? = nil,
+        label: String? = nil,
+        barcode: String? = nil,
+        mediaFormat: String? = nil
+    ) {
+        self.name = name
+        self.imageUrl = imageUrl
+        self.wiki = wiki
+        self.releaseDate = releaseDate
+        self.genre = genre
+        self.style = style
+        self.mood = mood
+        self.theme = theme
+        self.tracks = tracks
+        self.releaseType = releaseType
+        self.country = country
+        self.label = label
+        self.barcode = barcode
+        self.mediaFormat = mediaFormat
+    }
 }
 
 struct Track: Codable, Identifiable {
@@ -102,6 +168,7 @@ struct Track: Codable, Identifiable {
     let s3Key: String
     let url: String?
     let embeddedArtworkUrl: String?
+    let albumArtworkUrl: String?  // Fallback when no embedded artwork
     let genre: String?
     let style: String?
     let mood: String?
@@ -125,6 +192,7 @@ struct Track: Codable, Identifiable {
         case trackNumber = "track_number"
         case s3Key = "s3_key"
         case embeddedArtworkUrl = "embedded_artwork_url"
+        case albumArtworkUrl = "album_artwork_url"
         case albumArtist = "album_artist"
         case trackTotal = "track_total"
         case discNumber = "disc_number"
@@ -137,6 +205,62 @@ struct Track: Codable, Identifiable {
         let minutes = duration / 60
         let seconds = duration % 60
         return String(format: "%d:%02d", minutes, seconds)
+    }
+
+    init(
+        title: String,
+        artist: String? = nil,
+        album: String? = nil,
+        trackNumber: Int? = nil,
+        duration: Int? = nil,
+        format: String,
+        s3Key: String,
+        url: String? = nil,
+        embeddedArtworkUrl: String? = nil,
+        albumArtworkUrl: String? = nil,
+        genre: String? = nil,
+        style: String? = nil,
+        mood: String? = nil,
+        theme: String? = nil,
+        albumArtist: String? = nil,
+        trackTotal: Int? = nil,
+        discNumber: Int? = nil,
+        discTotal: Int? = nil,
+        year: Int? = nil,
+        composer: String? = nil,
+        comment: String? = nil,
+        bitrate: Double? = nil,
+        samplerate: Int? = nil,
+        channels: Int? = nil,
+        filesize: Int? = nil,
+        originalFormat: String? = nil
+    ) {
+        self.title = title
+        self.artist = artist
+        self.album = album
+        self.trackNumber = trackNumber
+        self.duration = duration
+        self.format = format
+        self.s3Key = s3Key
+        self.url = url
+        self.embeddedArtworkUrl = embeddedArtworkUrl
+        self.albumArtworkUrl = albumArtworkUrl
+        self.genre = genre
+        self.style = style
+        self.mood = mood
+        self.theme = theme
+        self.albumArtist = albumArtist
+        self.trackTotal = trackTotal
+        self.discNumber = discNumber
+        self.discTotal = discTotal
+        self.year = year
+        self.composer = composer
+        self.comment = comment
+        self.bitrate = bitrate
+        self.samplerate = samplerate
+        self.channels = channels
+        self.filesize = filesize
+        self.originalFormat = originalFormat
     }
 }
 

@@ -104,8 +104,13 @@ struct SongRow: View {
         FavoritesStore.shared.isTrackFavorite(track.s3Key)
     }
 
+    /// Best artwork URL: embedded art first, then album art fallback
+    private var artworkUrl: String? {
+        track.embeddedArtworkUrl ?? track.albumArtworkUrl
+    }
+
     private var localArtworkURL: URL? {
-        guard let urlString = track.embeddedArtworkUrl else { return nil }
+        guard let urlString = artworkUrl else { return nil }
         return cacheService?.localArtworkURL(for: urlString)
     }
 
@@ -114,7 +119,7 @@ struct SongRow: View {
             // Album artwork with now playing indicator overlay
             ZStack {
                 ArtworkImage(
-                    url: track.embeddedArtworkUrl,
+                    url: artworkUrl,
                     size: 44,
                     systemImage: "music.note",
                     localURL: localArtworkURL,
