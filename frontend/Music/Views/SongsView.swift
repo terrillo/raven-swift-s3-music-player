@@ -11,6 +11,8 @@ struct SongsView: View {
     var playerService: PlayerService
     var cacheService: CacheService?
 
+    @State private var navigationPath = NavigationPath()
+
     private var firstPlayableTrack: Track? {
         musicService.songs.first { playerService.isTrackPlayable($0) }
     }
@@ -20,7 +22,7 @@ struct SongsView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $navigationPath) {
             content
                 .navigationTitle("Songs")
                 .toolbar {
@@ -32,7 +34,19 @@ struct SongsView: View {
                         }
                     }
                 }
+                .navigationDestination(for: NavigationDestination.self) { destination in
+                    switch destination {
+                    case .artist(let artist):
+                        ArtistDetailView(artist: artist, musicService: musicService, playerService: playerService, cacheService: cacheService)
+                    case .album(let album, _):
+                        AlbumDetailView(album: album, musicService: musicService, playerService: playerService, cacheService: cacheService)
+                    }
+                }
         }
+    }
+
+    private func navigate(to destination: NavigationDestination) {
+        navigationPath.append(destination)
     }
 
     @ViewBuilder
@@ -70,9 +84,16 @@ struct SongsView: View {
                                 playerService.play(track: track, queue: musicService.songs)
                             }
                         } label: {
-                            SongRow(track: track, playerService: playerService, cacheService: cacheService, isPlayable: isPlayable)
-                                .padding(.horizontal)
-                                .padding(.vertical, 8)
+                            SongRow.songs(
+                                track: track,
+                                playerService: playerService,
+                                cacheService: cacheService,
+                                musicService: musicService,
+                                isPlayable: isPlayable,
+                                onNavigate: navigate
+                            )
+                            .padding(.horizontal)
+                            .padding(.vertical, 8)
                         }
                         .buttonStyle(.plain)
                         .disabled(!isPlayable)
@@ -83,101 +104,6 @@ struct SongsView: View {
                 }
             }
         }
-    }
-}
-
-struct SongRow: View {
-    let track: Track
-    var playerService: PlayerService
-    var cacheService: CacheService?
-    var isPlayable: Bool = true
-    var showFavoriteButton: Bool = true
-    var albumImageUrl: String? = nil
-    var artistImageUrl: String? = nil
-
-    private var isCurrentTrack: Bool {
-        playerService.currentTrack?.id == track.id
-    }
-
-    private var isFavorite: Bool {
-        FavoritesStore.shared.isTrackFavorite(track.s3Key)
-    }
-
-    /// Prefer album artwork over embedded artwork to reduce cache size
-    /// Falls back to artist image if no album or embedded artwork exists
-    private var preferredArtworkUrl: String? {
-        albumImageUrl ?? track.embeddedArtworkUrl ?? artistImageUrl
-    }
-
-    private var localArtworkURL: URL? {
-        guard let urlString = preferredArtworkUrl else { return nil }
-        return cacheService?.localArtworkURL(for: urlString)
-    }
-
-    var body: some View {
-        HStack {
-            // Album artwork with now playing indicator overlay
-            ZStack {
-                ArtworkImage(
-                    url: preferredArtworkUrl,
-                    size: 44,
-                    systemImage: "music.note",
-                    localURL: localArtworkURL,
-                    cacheService: cacheService
-                )
-
-                if isCurrentTrack {
-                    Color.black.opacity(0.4)
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
-                    Image(systemName: playerService.isPlaying ? "speaker.wave.2.fill" : "speaker.fill")
-                        .foregroundStyle(.white)
-                }
-            }
-            .frame(width: 44, height: 44)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(track.title)
-                    .font(.headline)
-                    .foregroundStyle(isCurrentTrack ? Color.appAccent : (isPlayable ? .primary : .secondary))
-                    .lineLimit(1)
-                if let artist = track.artist {
-                    Text(artist)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-                if let album = track.album {
-                    Text(album)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                }
-            }
-
-            Spacer()
-
-            if showFavoriteButton {
-                Button {
-                    FavoritesStore.shared.toggleTrackFavorite(track)
-                } label: {
-                    Image(systemName: isFavorite ? "heart.fill" : "heart")
-                        .foregroundStyle(isFavorite ? .pink : .secondary)
-                }
-                .buttonStyle(.plain)
-            }
-
-            if !isPlayable {
-                Image(systemName: "arrow.down.circle")
-                    .foregroundStyle(.secondary)
-                    .font(.caption)
-            }
-
-            Text(track.formattedDuration)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .opacity(isPlayable ? 1.0 : 0.5)
     }
 }
 

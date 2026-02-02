@@ -206,6 +206,7 @@ struct NowPlayingSheet: View {
                 QueueListView(
                     tracks: playerService.previousTracks,
                     accentColor: artworkColor,
+                    playerService: playerService,
                     emptyTitle: "No History",
                     emptyMessage: "Songs you've played will appear here"
                 ) { track in
@@ -307,6 +308,7 @@ struct NowPlayingSheet: View {
                 QueueListView(
                     tracks: playerService.upNextTracks,
                     accentColor: artworkColor,
+                    playerService: playerService,
                     emptyTitle: "Queue Empty",
                     emptyMessage: "No upcoming tracks in queue"
                 ) { track in

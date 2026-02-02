@@ -220,6 +220,8 @@ struct FavoriteTracksView: View {
     var playerService: PlayerService
     var cacheService: CacheService?
 
+    @State private var pendingNavigation: NavigationDestination?
+
     private var favoriteTracks: [Track] {
         let favoriteEntities = FavoritesStore.shared.fetchFavoriteTracks()
         return favoriteEntities.compactMap { entity in
@@ -268,9 +270,16 @@ struct FavoriteTracksView: View {
                                     playerService.play(track: track, queue: favoriteTracks)
                                 }
                             } label: {
-                                SongRow(track: track, playerService: playerService, cacheService: cacheService, isPlayable: isPlayable)
-                                    .padding(.horizontal)
-                                    .padding(.vertical, 8)
+                                SongRow.songs(
+                                    track: track,
+                                    playerService: playerService,
+                                    cacheService: cacheService,
+                                    musicService: musicService,
+                                    isPlayable: isPlayable,
+                                    onNavigate: { pendingNavigation = $0 }
+                                )
+                                .padding(.horizontal)
+                                .padding(.vertical, 8)
                             }
                             .buttonStyle(.plain)
                             .disabled(!isPlayable)
@@ -283,6 +292,14 @@ struct FavoriteTracksView: View {
             }
         }
         .navigationTitle("Favorite Songs")
+        .navigationDestination(item: $pendingNavigation) { destination in
+            switch destination {
+            case .artist(let artist):
+                ArtistDetailView(artist: artist, musicService: musicService, playerService: playerService, cacheService: cacheService)
+            case .album(let album, _):
+                AlbumDetailView(album: album, musicService: musicService, playerService: playerService, cacheService: cacheService)
+            }
+        }
     }
 }
 
@@ -290,6 +307,8 @@ struct RecentlyAddedView: View {
     var musicService: MusicService
     var playerService: PlayerService
     var cacheService: CacheService?
+
+    @State private var pendingNavigation: NavigationDestination?
 
     private var recentTracks: [Track] {
         musicService.recentlyAddedSongs
@@ -335,11 +354,13 @@ struct RecentlyAddedView: View {
                                     playerService.play(track: track, queue: recentTracks)
                                 }
                             } label: {
-                                RecentlyAddedRow(
+                                SongRow.recentlyAdded(
                                     track: track,
                                     playerService: playerService,
                                     cacheService: cacheService,
-                                    isPlayable: isPlayable
+                                    musicService: musicService,
+                                    isPlayable: isPlayable,
+                                    onNavigate: { pendingNavigation = $0 }
                                 )
                                 .padding(.horizontal)
                                 .padding(.vertical, 8)
@@ -355,88 +376,14 @@ struct RecentlyAddedView: View {
             }
         }
         .navigationTitle("Recently Added")
-    }
-}
-
-struct RecentlyAddedRow: View {
-    let track: Track
-    var playerService: PlayerService
-    var cacheService: CacheService?
-    var isPlayable: Bool = true
-
-    private var isCurrentTrack: Bool {
-        playerService.currentTrack?.id == track.id
-    }
-
-    private var isFavorite: Bool {
-        FavoritesStore.shared.isTrackFavorite(track.s3Key)
-    }
-
-    private var relativeDate: String {
-        guard let addedAt = track.addedAt else { return "" }
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .abbreviated
-        return formatter.localizedString(for: addedAt, relativeTo: Date())
-    }
-
-    var body: some View {
-        HStack {
-            // Album artwork with now playing indicator
-            ZStack {
-                ArtworkImage(
-                    url: track.embeddedArtworkUrl,
-                    size: 44,
-                    systemImage: "music.note",
-                    cacheService: cacheService
-                )
-
-                if isCurrentTrack {
-                    Color.black.opacity(0.4)
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
-                    Image(systemName: playerService.isPlaying ? "speaker.wave.2.fill" : "speaker.fill")
-                        .foregroundStyle(.white)
-                }
+        .navigationDestination(item: $pendingNavigation) { destination in
+            switch destination {
+            case .artist(let artist):
+                ArtistDetailView(artist: artist, musicService: musicService, playerService: playerService, cacheService: cacheService)
+            case .album(let album, _):
+                AlbumDetailView(album: album, musicService: musicService, playerService: playerService, cacheService: cacheService)
             }
-            .frame(width: 44, height: 44)
-
-            VStack(alignment: .leading) {
-                Text(track.title)
-                    .font(.headline)
-                    .foregroundStyle(isCurrentTrack ? Color.appAccent : (isPlayable ? .primary : .secondary))
-                HStack {
-                    if let artist = track.artist {
-                        Text(artist)
-                    }
-                    if !relativeDate.isEmpty {
-                        Text("•")
-                        Text(relativeDate)
-                    }
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            }
-
-            Spacer()
-
-            Button {
-                FavoritesStore.shared.toggleTrackFavorite(track)
-            } label: {
-                Image(systemName: isFavorite ? "heart.fill" : "heart")
-                    .foregroundStyle(isFavorite ? .pink : .secondary)
-            }
-            .buttonStyle(.plain)
-
-            if !isPlayable {
-                Image(systemName: "arrow.down.circle")
-                    .foregroundStyle(.secondary)
-                    .font(.caption)
-            }
-
-            Text(track.formattedDuration)
-                .font(.caption)
-                .foregroundStyle(.secondary)
         }
-        .opacity(isPlayable ? 1.0 : 0.5)
     }
 }
 
@@ -446,6 +393,7 @@ struct Top100View: View {
     var cacheService: CacheService?
 
     @State private var selectedPeriod: TimePeriod = .allTime
+    @State private var pendingNavigation: NavigationDestination?
 
     private var topTracks: [(track: Track, playCount: Int)] {
         // Fetch top tracks from Core Data + CloudKit with time filtering
@@ -491,13 +439,15 @@ struct Top100View: View {
                                 playerService.play(track: item.track, queue: tracks)
                             }
                         } label: {
-                            Top100Row(
-                                rank: index + 1,
+                            SongRow.top100(
                                 track: item.track,
+                                rank: index + 1,
                                 playCount: item.playCount,
                                 playerService: playerService,
                                 cacheService: cacheService,
-                                isPlayable: isPlayable
+                                musicService: musicService,
+                                isPlayable: isPlayable,
+                                onNavigate: { pendingNavigation = $0 }
                             )
                         }
                         .buttonStyle(.plain)
@@ -520,87 +470,14 @@ struct Top100View: View {
                 .help("Refresh stats")
             }
         }
-    }
-}
-
-struct Top100Row: View {
-    let rank: Int
-    let track: Track
-    let playCount: Int
-    var playerService: PlayerService
-    var cacheService: CacheService?
-    var isPlayable: Bool = true
-
-    private var isCurrentTrack: Bool {
-        playerService.currentTrack?.id == track.id
-    }
-
-    private var isFavorite: Bool {
-        FavoritesStore.shared.isTrackFavorite(track.s3Key)
-    }
-
-    var body: some View {
-        HStack {
-            // Rank number
-            Text("\(rank)")
-                .font(.headline)
-                .foregroundStyle(isCurrentTrack ? Color.appAccent : .secondary)
-                .frame(width: 30)
-
-            // Album artwork with now playing indicator
-            ZStack {
-                ArtworkImage(
-                    url: track.embeddedArtworkUrl,
-                    size: 44,
-                    systemImage: "music.note",
-                    cacheService: cacheService
-                )
-
-                if isCurrentTrack {
-                    Color.black.opacity(0.4)
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
-                    Image(systemName: playerService.isPlaying ? "speaker.wave.2.fill" : "speaker.fill")
-                        .foregroundStyle(.white)
-                }
+        .navigationDestination(item: $pendingNavigation) { destination in
+            switch destination {
+            case .artist(let artist):
+                ArtistDetailView(artist: artist, musicService: musicService, playerService: playerService, cacheService: cacheService)
+            case .album(let album, _):
+                AlbumDetailView(album: album, musicService: musicService, playerService: playerService, cacheService: cacheService)
             }
-            .frame(width: 44, height: 44)
-
-            VStack(alignment: .leading) {
-                Text(track.title)
-                    .font(.headline)
-                    .foregroundStyle(isCurrentTrack ? Color.appAccent : (isPlayable ? .primary : .secondary))
-                HStack {
-                    if let artist = track.artist {
-                        Text(artist)
-                    }
-                    Text("•")
-                    Text("\(playCount) plays")
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            }
-
-            Spacer()
-
-            Button {
-                FavoritesStore.shared.toggleTrackFavorite(track)
-            } label: {
-                Image(systemName: isFavorite ? "heart.fill" : "heart")
-                    .foregroundStyle(isFavorite ? .pink : .secondary)
-            }
-            .buttonStyle(.plain)
-
-            if !isPlayable {
-                Image(systemName: "arrow.down.circle")
-                    .foregroundStyle(.secondary)
-                    .font(.caption)
-            }
-
-            Text(track.formattedDuration)
-                .font(.caption)
-                .foregroundStyle(.secondary)
         }
-        .opacity(isPlayable ? 1.0 : 0.5)
     }
 }
 

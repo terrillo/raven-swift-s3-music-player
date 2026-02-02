@@ -540,6 +540,7 @@ struct AlbumDetailView: View {
     var cacheService: CacheService?
 
     @State private var artworkColor: Color = Color(white: 0.3)
+    @State private var pendingNavigation: NavigationDestination?
 
     private var firstPlayableTrack: Track? {
         album.tracks.first { playerService.isTrackPlayable($0) }
@@ -733,7 +734,13 @@ struct AlbumDetailView: View {
                             playerService.play(track: track, album: album)
                         }
                     } label: {
-                        AlbumTrackRow(track: track, playerService: playerService, isPlayable: isPlayable)
+                        SongRow.albumTrack(
+                            track: track,
+                            playerService: playerService,
+                            musicService: musicService,
+                            isPlayable: isPlayable,
+                            onNavigate: { pendingNavigation = $0 }
+                        )
                     }
                     .buttonStyle(.plain)
                     .disabled(!isPlayable)
@@ -763,70 +770,14 @@ struct AlbumDetailView: View {
         #if os(iOS)
         .toolbarBackground(artworkColor, for: .navigationBar)
         #endif
-    }
-}
-
-struct AlbumTrackRow: View {
-    let track: Track
-    var playerService: PlayerService
-    var isPlayable: Bool = true
-
-    private var isCurrentTrack: Bool {
-        playerService.currentTrack?.id == track.id
-    }
-
-    private var isFavorite: Bool {
-        FavoritesStore.shared.isTrackFavorite(track.s3Key)
-    }
-
-    var body: some View {
-        HStack {
-            // Now playing indicator or track number
-            if isCurrentTrack {
-                Image(systemName: playerService.isPlaying ? "speaker.wave.2.fill" : "speaker.fill")
-                    .foregroundStyle(Color.appAccent)
-                    .frame(width: 30)
-            } else if let trackNumber = track.trackNumber {
-                Text("\(trackNumber)")
-                    .foregroundStyle(isPlayable ? .secondary : .tertiary)
-                    .frame(width: 30)
-            } else {
-                Spacer()
-                    .frame(width: 30)
+        .navigationDestination(item: $pendingNavigation) { destination in
+            switch destination {
+            case .artist(let artist):
+                ArtistDetailView(artist: artist, musicService: musicService, playerService: playerService, cacheService: cacheService)
+            case .album(let album, _):
+                AlbumDetailView(album: album, musicService: musicService, playerService: playerService, cacheService: cacheService)
             }
-
-            VStack(alignment: .leading) {
-                Text(track.title)
-                    .font(.headline)
-                    .foregroundStyle(isCurrentTrack ? Color.appAccent : (isPlayable ? .primary : .secondary))
-                if let artist = track.artist {
-                    Text(artist)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            Spacer()
-
-            Button {
-                FavoritesStore.shared.toggleTrackFavorite(track)
-            } label: {
-                Image(systemName: isFavorite ? "heart.fill" : "heart")
-                    .foregroundStyle(isFavorite ? .pink : .secondary)
-            }
-            .buttonStyle(.plain)
-
-            if !isPlayable {
-                Image(systemName: "arrow.down.circle")
-                    .foregroundStyle(.secondary)
-                    .font(.caption)
-            }
-
-            Text(track.formattedDuration)
-                .font(.caption)
-                .foregroundStyle(.secondary)
         }
-        .opacity(isPlayable ? 1.0 : 0.5)
     }
 }
 
@@ -1037,8 +988,8 @@ extension Artist {
 
 #Preview("Album Track Row") {
     List {
-        AlbumTrackRow(track: .preview, playerService: PlayerService())
-        AlbumTrackRow(track: .preview, playerService: PlayerService(), isPlayable: false)
+        SongRow.albumTrack(track: .preview, playerService: PlayerService())
+        SongRow.albumTrack(track: .preview, playerService: PlayerService(), isPlayable: false)
     }
 }
 

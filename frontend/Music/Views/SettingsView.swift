@@ -13,6 +13,7 @@ struct SettingsView: View {
 
     @AppStorage("streamingModeEnabled") private var streamingModeEnabled = false
     @AppStorage("autoImageCachingEnabled") private var autoImageCachingEnabled = true
+    @AppStorage("maxCacheSizeGB") private var maxCacheSizeGB: Int = 0
     @State private var cdnPrefix: String = NSUbiquitousKeyValueStore.default.string(forKey: "cdnPrefix") ?? MusicService.defaultCDNPrefix
     @State private var showingCacheSheet = false
     @State private var showingClearConfirmation = false
@@ -53,6 +54,25 @@ struct SettingsView: View {
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 8)
+
+                    Divider()
+                        .padding(.vertical, 4)
+
+                    HStack {
+                        Text("Max Cache Size")
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        TextField("0", value: $maxCacheSizeGB, format: .number)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 60)
+                        Text("GB")
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Text("Set to 0 for unlimited. Most played tracks are kept when limit is reached.")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .padding(.top, 2)
 
                     Divider()
                         .padding(.vertical, 4)
@@ -235,7 +255,7 @@ struct SettingsView: View {
                     }
                 }
 
-                Section("Storage") {
+                Section {
                     Button {
                         showingCacheSheet = true
                     } label: {
@@ -262,14 +282,32 @@ struct SettingsView: View {
                             .foregroundStyle(.secondary)
                     }
 
+                    HStack {
+                        Label("Max Cache", systemImage: "gauge.with.dots.needle.bottom.50percent")
+                        Spacer()
+                        TextField("0", value: $maxCacheSizeGB, format: .number)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 60)
+                            #if os(iOS)
+                            .keyboardType(.numberPad)
+                            #endif
+                            .multilineTextAlignment(.trailing)
+                        Text("GB")
+                            .foregroundStyle(.secondary)
+                    }
+
                     Button(role: .destructive) {
                         showingClearConfirmation = true
                     } label: {
                         Label("Clear Cache", systemImage: "trash")
                     }
+                } header: {
+                    Text("Storage")
+                } footer: {
+                    Text("Set Max Cache to 0 for unlimited. Most played tracks are kept when limit is reached.")
+                }
 
-                    Divider()
-
+                Section("Images") {
                     Toggle(isOn: $autoImageCachingEnabled) {
                         Label {
                             VStack(alignment: .leading) {

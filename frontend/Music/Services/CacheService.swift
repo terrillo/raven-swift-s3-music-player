@@ -4,6 +4,7 @@
 //
 
 import Foundation
+import SwiftUI
 import SwiftData
 import CryptoKit
 
@@ -34,6 +35,20 @@ class CacheService {
     private var cachedArtworkUrls: Set<String> = []
 
     private var modelContext: ModelContext
+
+    // MARK: - Storage Limit
+
+    /// Maximum cache size in GB (0 = unlimited). Uses UserDefaults directly since @Observable doesn't support @AppStorage.
+    var maxCacheSizeGB: Int {
+        get { UserDefaults.standard.integer(forKey: "maxCacheSizeGB") }
+        set { UserDefaults.standard.set(newValue, forKey: "maxCacheSizeGB") }
+    }
+
+    /// Check if storage limit is enabled
+    var hasStorageLimit: Bool { maxCacheSizeGB > 0 }
+
+    /// Max cache size in bytes
+    var maxCacheSizeBytes: Int64 { Int64(maxCacheSizeGB) * 1_000_000_000 }
 
     init(modelContext: ModelContext) {
         self.modelContext = modelContext
@@ -158,6 +173,64 @@ class CacheService {
     func cachedTrackCount() -> Int {
         let descriptor = FetchDescriptor<CachedTrack>()
         return (try? modelContext.fetchCount(descriptor)) ?? 0
+    }
+
+    // MARK: - Storage Limit Enforcement
+
+    /// Enforce storage limit by evicting lowest-priority tracks (least played first)
+    func enforceStorageLimit() async {
+        // Skip if unlimited
+        guard hasStorageLimit else { return }
+
+        var currentSize = getCacheSize()
+        let maxSize = maxCacheSizeBytes
+
+        // Skip if under limit
+        guard currentSize > maxSize else { return }
+
+        // Fetch all cached tracks
+        let descriptor = FetchDescriptor<CachedTrack>()
+        guard let cachedTracks = try? modelContext.fetch(descriptor), !cachedTracks.isEmpty else { return }
+
+        // Get play counts for all cached tracks
+        let trackKeys = Set(cachedTracks.map { $0.s3Key })
+        let playCounts = AnalyticsStore.shared.fetchPlayCounts(for: trackKeys)
+
+        // Sort tracks by priority: play count ascending (lowest first), then cachedAt ascending (oldest first)
+        let sortedTracks = cachedTracks.sorted { track1, track2 in
+            let count1 = playCounts[track1.s3Key] ?? 0
+            let count2 = playCounts[track2.s3Key] ?? 0
+            if count1 != count2 {
+                return count1 < count2  // Lower play count = evict first
+            }
+            return track1.cachedAt < track2.cachedAt  // Older = evict first
+        }
+
+        // Evict tracks until under limit
+        for track in sortedTracks {
+            guard currentSize > maxSize else { break }
+
+            let freedBytes = track.fileSize
+            await deleteCachedTrack(track)
+            currentSize -= freedBytes
+        }
+    }
+
+    /// Delete a single cached track (used for eviction)
+    func deleteCachedTrack(_ cachedTrack: CachedTrack) async {
+        // Delete the file
+        let localURL = tracksDirectory.appendingPathComponent(cachedTrack.localFileName)
+        try? FileManager.default.removeItem(at: localURL)
+
+        // Remove from in-memory cache
+        cachedTrackKeys.remove(cachedTrack.s3Key)
+
+        // Remove download status
+        trackDownloadStatus.removeValue(forKey: cachedTrack.s3Key)
+
+        // Delete the database record
+        modelContext.delete(cachedTrack)
+        try? modelContext.save()
     }
 
     // MARK: - Artwork Cache Size
@@ -402,6 +475,9 @@ class CacheService {
             cachedTrackKeys.insert(track.s3Key)
 
             trackDownloadStatus[track.s3Key] = .completed
+
+            // Enforce storage limit after successful download
+            await enforceStorageLimit()
 
         } catch {
             trackDownloadStatus[track.s3Key] = .failed(error: error.localizedDescription)

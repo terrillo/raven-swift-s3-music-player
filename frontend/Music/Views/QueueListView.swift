@@ -8,6 +8,7 @@ import SwiftUI
 struct QueueListView: View {
     let tracks: [Track]
     let accentColor: Color
+    let playerService: PlayerService
     let emptyTitle: String
     let emptyMessage: String
     let onTrackTap: (Track) -> Void
@@ -15,12 +16,14 @@ struct QueueListView: View {
     init(
         tracks: [Track],
         accentColor: Color,
+        playerService: PlayerService,
         emptyTitle: String = "No Tracks",
         emptyMessage: String = "No tracks to display",
         onTrackTap: @escaping (Track) -> Void
     ) {
         self.tracks = tracks
         self.accentColor = accentColor
+        self.playerService = playerService
         self.emptyTitle = emptyTitle
         self.emptyMessage = emptyMessage
         self.onTrackTap = onTrackTap
@@ -49,35 +52,12 @@ struct QueueListView: View {
                         Button {
                             onTrackTap(track)
                         } label: {
-                            HStack(spacing: 12) {
-                                Text("\(index + 1)")
-                                    .font(.caption)
-                                    .foregroundStyle(accentColor.contrastingSecondary)
-                                    .frame(width: 24)
-
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(track.title)
-                                        .font(.body)
-                                        .foregroundStyle(accentColor.contrastingForeground)
-                                        .lineLimit(1)
-
-                                    if let artist = track.artist {
-                                        Text(artist)
-                                            .font(.caption)
-                                            .foregroundStyle(accentColor.contrastingSecondary)
-                                            .lineLimit(1)
-                                    }
-                                }
-
-                                Spacer()
-
-                                if let duration = track.duration {
-                                    Text(formatDuration(duration))
-                                        .font(.caption)
-                                        .foregroundStyle(accentColor.labelTertiary)
-                                        .monospacedDigit()
-                                }
-                            }
+                            SongRow.queue(
+                                track: track,
+                                index: index + 1,
+                                playerService: playerService,
+                                accentColor: accentColor
+                            )
                             .padding(.horizontal, 16)
                             .padding(.vertical, 10)
                         }
@@ -91,12 +71,6 @@ struct QueueListView: View {
                 }
             }
         }
-    }
-
-    private func formatDuration(_ duration: Int) -> String {
-        let minutes = duration / 60
-        let seconds = duration % 60
-        return String(format: "%d:%02d", minutes, seconds)
     }
 }
 
@@ -148,6 +122,7 @@ extension Track {
             .preview(title: "Somebody to Love", artist: "Queen", album: "A Day at the Races", trackNumber: 3, duration: 296),
         ],
         accentColor: .blue,
+        playerService: PlayerService(),
         emptyTitle: "No History",
         emptyMessage: "Play some songs to see your history"
     ) { track in
@@ -160,6 +135,7 @@ extension Track {
     QueueListView(
         tracks: [],
         accentColor: .purple,
+        playerService: PlayerService(),
         emptyTitle: "No History",
         emptyMessage: "Play some songs to see your history"
     ) { _ in }

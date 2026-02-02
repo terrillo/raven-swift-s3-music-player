@@ -10,6 +10,7 @@ struct SearchView: View {
     @State private var searchText = ""
     @State private var debouncedSearchText = ""
     @State private var searchTask: Task<Void, Never>?
+    @State private var navigationPath = NavigationPath()
 
     var musicService: MusicService
     var playerService: PlayerService
@@ -105,7 +106,7 @@ struct SearchView: View {
 
     #if os(iOS)
     private var iOSBody: some View {
-        NavigationStack {
+        NavigationStack(path: $navigationPath) {
             searchList
                 .searchable(text: $searchText, prompt: "Artists, Albums, Songs")
                 .onChange(of: searchText) { _, newValue in
@@ -118,6 +119,14 @@ struct SearchView: View {
                         Button("Done") {
                             dismiss()
                         }
+                    }
+                }
+                .navigationDestination(for: NavigationDestination.self) { destination in
+                    switch destination {
+                    case .artist(let artist):
+                        ArtistDetailView(artist: artist, musicService: musicService, playerService: playerService, cacheService: cacheService)
+                    case .album(let album, _):
+                        AlbumDetailView(album: album, musicService: musicService, playerService: playerService, cacheService: cacheService)
                     }
                 }
         }
@@ -238,7 +247,14 @@ struct SearchView: View {
                                     playerService.play(track: track, queue: filteredSongs)
                                 }
                             } label: {
-                                SongRow(track: track, playerService: playerService, cacheService: cacheService, isPlayable: isPlayable)
+                                SongRow.songs(
+                                    track: track,
+                                    playerService: playerService,
+                                    cacheService: cacheService,
+                                    musicService: musicService,
+                                    isPlayable: isPlayable,
+                                    onNavigate: navigate
+                                )
                             }
                             .buttonStyle(.plain)
                             .disabled(!isPlayable)
@@ -247,6 +263,10 @@ struct SearchView: View {
                 }
             }
         }
+    }
+
+    private func navigate(to destination: NavigationDestination) {
+        navigationPath.append(destination)
     }
 }
 
