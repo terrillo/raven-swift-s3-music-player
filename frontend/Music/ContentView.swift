@@ -9,27 +9,35 @@ import SwiftUI
 import SwiftData
 
 enum Tab: String, CaseIterable {
+    #if os(iOS)
+    case home = "Home"
+    #endif
     case artists = "Artists"
-    case genres = "Genres"
     case songs = "Songs"
     case playlists = "Playlists"
+    case radio = "Radio"
     #if os(macOS)
+    case genres = "Genres"
     case search = "Search"
     case upload = "Upload"
-    #endif
     case settings = "Cloud"
+    #endif
 
     var icon: String {
         switch self {
+        #if os(iOS)
+        case .home: return "house.fill"
+        #endif
         case .artists: return "person.3.sequence.fill"
-        case .genres: return "guitars"
         case .songs: return "music.note"
         case .playlists: return "music.note.square.stack"
+        case .radio: return "antenna.radiowaves.left.and.right"
         #if os(macOS)
+        case .genres: return "guitars"
         case .search: return "magnifyingglass"
         case .upload: return "arrow.up.circle"
-        #endif
         case .settings: return "icloud.fill"
+        #endif
         }
     }
 }
@@ -37,9 +45,14 @@ enum Tab: String, CaseIterable {
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.scenePhase) private var scenePhase
+    #if os(iOS)
+    @State private var selectedTab: Tab = .home
+    #else
     @State private var selectedTab: Tab = .artists
+    #endif
     @State private var showingSearch = false
     @State private var showingPlayer = false
+    @State private var showingSettings = false
     @State private var musicService = MusicService()
     @State private var playerService = PlayerService()
     @State private var cacheService: CacheService?
@@ -82,47 +95,63 @@ struct ContentView: View {
                 emptyStateView
             } else {
                 TabView(selection: $selectedTab) {
-                ArtistsView(showingSearch: $showingSearch, musicService: musicService, playerService: playerService, cacheService: cacheService, pendingNavigation: .constant(nil))
+                    HomeView(
+                        showingSearch: $showingSearch,
+                        showingSettings: $showingSettings,
+                        musicService: musicService,
+                        playerService: playerService,
+                        cacheService: cacheService
+                    )
                     .tabItem {
-                        Image(systemName: "person.3.sequence.fill")
+                        Image(systemName: "house.fill")
                     }
-                    .tag(Tab.artists)
+                    .tag(Tab.home)
 
-                GenreView(showingSearch: $showingSearch, musicService: musicService, playerService: playerService, cacheService: cacheService)
-                    .tabItem {
-                        Image(systemName: "guitars")
-                    }
-                    .tag(Tab.genres)
+                    SongsView(showingSearch: $showingSearch, musicService: musicService, playerService: playerService, cacheService: cacheService)
+                        .tabItem {
+                            Image(systemName: "music.note")
+                        }
+                        .tag(Tab.songs)
 
-                SongsView(showingSearch: $showingSearch, musicService: musicService, playerService: playerService, cacheService: cacheService)
-                    .tabItem {
-                        Image(systemName: "music.note")
-                    }
-                    .tag(Tab.songs)
+                    ArtistsView(showingSearch: $showingSearch, musicService: musicService, playerService: playerService, cacheService: cacheService, pendingNavigation: .constant(nil))
+                        .tabItem {
+                            Image(systemName: "person.3.sequence.fill")
+                        }
+                        .tag(Tab.artists)
 
-                PlaylistView(showingSearch: $showingSearch, musicService: musicService, playerService: playerService, cacheService: cacheService)
-                    .tabItem {
-                        Image(systemName: "music.note.square.stack")
-                    }
-                    .tag(Tab.playlists)
+                    PlaylistView(showingSearch: $showingSearch, musicService: musicService, playerService: playerService, cacheService: cacheService)
+                        .tabItem {
+                            Image(systemName: "music.note.square.stack")
+                        }
+                        .tag(Tab.playlists)
 
-                SettingsView(showingSearch: $showingSearch, cacheService: cacheService ?? CacheService(modelContext: modelContext), musicService: musicService)
-                    .tabItem {
-                        Image(systemName: "icloud.fill")
-                    }
-                    .tag(Tab.settings)
-            }
-            .tabViewBottomAccessory {
-                if playerService.hasTrack {
-                    NowPlayingAccessory(playerService: playerService, cacheService: cacheService, showingPlayer: $showingPlayer)
+                    RadioView(showingSearch: $showingSearch, musicService: musicService, playerService: playerService, cacheService: cacheService)
+                        .tabItem {
+                            Image(systemName: "antenna.radiowaves.left.and.right")
+                        }
+                        .tag(Tab.radio)
                 }
-            }
-            .sheet(isPresented: $showingSearch) {
-                SearchView(musicService: musicService, playerService: playerService, cacheService: cacheService)
-            }
-            .sheet(isPresented: $showingPlayer) {
-                NowPlayingSheet(playerService: playerService, musicService: musicService, cacheService: cacheService)
-            }
+                .tabViewBottomAccessory {
+                    if playerService.hasTrack {
+                        NowPlayingAccessory(playerService: playerService, cacheService: cacheService, showingPlayer: $showingPlayer)
+                    }
+                }
+                .sheet(isPresented: $showingSearch) {
+                    SearchView(musicService: musicService, playerService: playerService, cacheService: cacheService)
+                }
+                .sheet(isPresented: $showingPlayer) {
+                    NowPlayingSheet(playerService: playerService, musicService: musicService, cacheService: cacheService)
+                }
+                .sheet(isPresented: $showingSettings) {
+                    NavigationStack {
+                        SettingsView(showingSearch: $showingSearch, cacheService: cacheService ?? CacheService(modelContext: modelContext), musicService: musicService)
+                            .toolbar {
+                                ToolbarItem(placement: .cancellationAction) {
+                                    Button("Done") { showingSettings = false }
+                                }
+                            }
+                    }
+                }
             }  // end else (has content)
             #else
             NavigationSplitView {
@@ -176,6 +205,12 @@ struct ContentView: View {
                             emptyStateView
                         } else {
                             PlaylistView(showingSearch: $showingSearch, musicService: musicService, playerService: playerService, cacheService: cacheService)
+                        }
+                    case .radio:
+                        if musicService.isEmpty {
+                            emptyStateView
+                        } else {
+                            RadioView(showingSearch: $showingSearch, musicService: musicService, playerService: playerService, cacheService: cacheService)
                         }
                     case .search:
                         SearchView(musicService: musicService, playerService: playerService, cacheService: cacheService)

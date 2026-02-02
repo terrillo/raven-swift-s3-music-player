@@ -234,6 +234,24 @@ struct NowPlayingSheet: View {
             )
             .shadow(radius: 20)
 
+            // Radio Mode Indicator
+            if playerService.isRadioMode, let seed = playerService.radioService?.currentSeed {
+                HStack(spacing: 6) {
+                    Image(systemName: "antenna.radiowaves.left.and.right")
+                        .font(.caption)
+                    Text("Radio: \(seed.displayName)")
+                        .font(.caption)
+                        .fontWeight(.medium)
+                }
+                .foregroundStyle(artworkColor.contrastingForeground.opacity(0.8))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background {
+                    Capsule()
+                        .fill(artworkColor.contrastingForeground.opacity(0.15))
+                }
+            }
+
             // Track Info
             VStack(spacing: 8) {
                 HStack(spacing: 12) {
@@ -390,13 +408,12 @@ struct NowPlayingSheet: View {
                     Image(systemName: "shuffle")
                         .font(.title3)
                         .fontWeight(.semibold)
-                        .foregroundStyle(playerService.isShuffled ? .white : artworkColor.contrastingSecondary)
+                        .foregroundStyle(playerService.isShuffled ? artworkColor.contrastingForeground : artworkColor.contrastingSecondary)
                         .frame(width: 36, height: 36)
                         .background {
                             if playerService.isShuffled {
-                                Rectangle()
-                                    .background(.ultraThinMaterial)
-                                    .cornerRadius(6.0)
+                                RoundedRectangle(cornerRadius: 6.0)
+                                    .fill(artworkColor.contrastingForeground.opacity(0.2))
                             }
                         }
                 }
@@ -410,13 +427,12 @@ struct NowPlayingSheet: View {
                     Image(systemName: repeatIcon)
                         .font(.title3)
                         .fontWeight(.semibold)
-                        .foregroundStyle(playerService.repeatMode != .off ? .white : artworkColor.contrastingSecondary)
+                        .foregroundStyle(playerService.repeatMode != .off ? artworkColor.contrastingForeground : artworkColor.contrastingSecondary)
                         .frame(width: 36, height: 36)
                         .background {
                             if playerService.repeatMode != .off {
-                                Rectangle()
-                                    .background(.ultraThinMaterial)
-                                    .cornerRadius(6.0)
+                                RoundedRectangle(cornerRadius: 6.0)
+                                    .fill(artworkColor.contrastingForeground.opacity(0.2))
                             }
                         }
                 }

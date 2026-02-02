@@ -68,7 +68,7 @@ class AnalyticsStore {
 
     // MARK: - Record Events
 
-    func recordPlay(track: Track, duration: TimeInterval, trackDuration: TimeInterval? = nil) {
+    func recordPlay(track: Track, duration: TimeInterval, trackDuration: TimeInterval? = nil, previousTrackS3Key: String? = nil) {
         guard isAvailable else { return }
         let event = PlayEventEntity(context: viewContext)
         event.trackS3Key = track.s3Key
@@ -76,6 +76,7 @@ class AnalyticsStore {
         event.artistName = track.artist
         event.playedAt = Date()
         event.duration = duration
+        event.previousTrackS3Key = previousTrackS3Key
 
         // Calculate completion rate if track duration is provided
         if let totalDuration = trackDuration, totalDuration > 0 {
@@ -305,6 +306,29 @@ class AnalyticsStore {
             scores[key] = Double(count)
         }
         return scores
+    }
+
+    // MARK: - Co-Play Pairs for Affinity
+
+    /// Returns co-play pairs (previousTrack -> currentTrack) for affinity analysis
+    /// Each pair represents a track that was played after another track
+    func fetchCoPlayPairs(since date: Date? = nil) -> [(previous: String, current: String, playedAt: Date)] {
+        let request = NSFetchRequest<PlayEventEntity>(entityName: "PlayEventEntity")
+
+        if let startDate = date {
+            request.predicate = NSPredicate(format: "playedAt >= %@ AND previousTrackS3Key != nil", startDate as NSDate)
+        } else {
+            request.predicate = NSPredicate(format: "previousTrackS3Key != nil")
+        }
+
+        guard let events = try? viewContext.fetch(request) else { return [] }
+
+        return events.compactMap { event in
+            guard let previous = event.previousTrackS3Key,
+                  let current = event.trackS3Key,
+                  let playedAt = event.playedAt else { return nil }
+            return (previous: previous, current: current, playedAt: playedAt)
+        }
     }
 
     // MARK: - Clear All Data

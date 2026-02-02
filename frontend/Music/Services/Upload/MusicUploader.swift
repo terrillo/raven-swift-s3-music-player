@@ -46,9 +46,40 @@ struct UploadProgress {
     var currentFile: String?
     var discoveredFiles: Int
 
+    /// Progress within the current phase (0.0 - 1.0)
     var progress: Double {
         guard totalFiles > 0 else { return 0 }
         return Double(processedFiles + skippedFiles + failedFiles) / Double(totalFiles)
+    }
+
+    /// Global progress across all phases (0.0 - 1.0)
+    /// Provides continuous progress instead of resetting between phases
+    var globalProgress: Double {
+        // Weights for each phase (total = 1.0)
+        let phaseWeights: [UploadPhase: Double] = [
+            .idle: 0.0,
+            .scanning: 0.05,
+            .fetchingExisting: 0.05,
+            .fetchingMetadata: 0.30,
+            .processing: 0.50,
+            .buildingCatalog: 0.05,
+            .savingCatalog: 0.05,
+            .complete: 0.0,
+            .cancelled: 0.0,
+            .failed: 0.0
+        ]
+
+        // Calculate base progress from completed phases
+        var baseProgress = 0.0
+        for (p, weight) in phaseWeights {
+            if p.rawOrder < phase.rawOrder {
+                baseProgress += weight
+            }
+        }
+
+        // Add progress within current phase
+        let currentPhaseWeight = phaseWeights[phase] ?? 0
+        return baseProgress + (progress * currentPhaseWeight)
     }
 
     enum UploadPhase: String {
@@ -62,6 +93,22 @@ struct UploadProgress {
         case complete = "Complete"
         case cancelled = "Cancelled"
         case failed = "Failed"
+
+        /// Numeric order for progress calculation
+        var rawOrder: Int {
+            switch self {
+            case .idle: return 0
+            case .scanning: return 1
+            case .fetchingExisting: return 2
+            case .fetchingMetadata: return 3
+            case .processing: return 4
+            case .buildingCatalog: return 5
+            case .savingCatalog: return 6
+            case .complete: return 7
+            case .cancelled: return 8
+            case .failed: return 9
+            }
+        }
     }
 }
 
@@ -89,7 +136,7 @@ class MusicUploader {
     private static let supportedExtensions = Set(["mp3", "m4a", "flac", "wav", "aac", "aiff"])
     private static let maxConcurrentWorkers = 16  // Network I/O bound, can handle more parallelism
     private static let maxConcurrentMetadataExtractors = 32  // Higher for modern Macs with SSDs and 8+ cores
-    private static let maxConcurrentAPILookups = 4  // Rate-limited external API lookups
+    private static let maxConcurrentAPILookups = 8  // Services have internal rate limiters, higher concurrency enables better pipelining
 
     func configure(config: UploadConfiguration, modelContext: ModelContext) {
         self.config = config
@@ -154,6 +201,10 @@ class MusicUploader {
         let storageService = StorageService(config: config)
         let theAudioDB = TheAudioDBService(storageService: nil)  // No storage for preview
         let metadataExtractor = MetadataExtractor(musicDirectory: folderURL)
+
+        // Log cache statistics for debugging
+        print("📊 Cache status:")
+        print("   \(await theAudioDB.cacheStats())")
 
         // Phase 1: Scan for audio files
         progress.phase = .scanning
@@ -234,84 +285,125 @@ class MusicUploader {
         }
 
         // Phase 5: Fetch corrections for unique artists (parallel with rate limiting)
+        // Optimization: Check cache first to skip API calls on rescan
         var artistCorrections: [String: String] = [:]
+        let cachedArtists = await theAudioDB.getCachedArtistKeys()
+        let uncachedArtists = uniqueArtists.subtracting(cachedArtists)
+
         progress.totalFiles = uniqueArtists.count
         progress.processedFiles = 0
 
-        await withTaskGroup(of: (String, String)?.self) { group in
-            var submitted = 0
-            let artistArray = Array(uniqueArtists)
+        if uncachedArtists.isEmpty {
+            // All artists are cached - fast path
+            print("✅ All \(uniqueArtists.count) artists found in cache")
+            for rawArtist in uniqueArtists {
+                let artistInfo = await theAudioDB.fetchArtistInfo(rawArtist)  // Returns from cache instantly
+                let corrected = artistInfo.name ?? Identifiers.normalizeArtistName(rawArtist) ?? rawArtist
+                artistCorrections[rawArtist] = corrected
+            }
+            await MainActor.run { progress.processedFiles = artistCorrections.count }
+        } else {
+            // Some artists need API lookup
+            print("📡 Fetching \(uncachedArtists.count) uncached artists (\(cachedArtists.count) cached)")
 
-            for rawArtist in artistArray {
-                if submitted >= Self.maxConcurrentAPILookups {
-                    if let result = await group.next(), let (raw, corrected) = result {
+            await withTaskGroup(of: (String, String)?.self) { group in
+                var submitted = 0
+                let artistArray = Array(uniqueArtists)
+
+                for rawArtist in artistArray {
+                    if submitted >= Self.maxConcurrentAPILookups {
+                        if let result = await group.next(), let (raw, corrected) = result {
+                            artistCorrections[raw] = corrected
+                            await MainActor.run { progress.processedFiles += 1 }
+                        }
+                    }
+
+                    group.addTask {
+                        if Task.isCancelled { return nil }
+                        let artistInfo = await theAudioDB.fetchArtistInfo(rawArtist)
+                        let corrected = artistInfo.name ?? Identifiers.normalizeArtistName(rawArtist) ?? rawArtist
+                        return (rawArtist, corrected)
+                    }
+                    submitted += 1
+                }
+
+                // Collect remaining
+                for await result in group {
+                    if let (raw, corrected) = result {
                         artistCorrections[raw] = corrected
-                        await MainActor.run { progress.processedFiles += 1 }
                     }
                 }
 
-                group.addTask {
-                    if Task.isCancelled { return nil }
-                    let artistInfo = await theAudioDB.fetchArtistInfo(rawArtist)
-                    let corrected = artistInfo.name ?? Identifiers.normalizeArtistName(rawArtist) ?? rawArtist
-                    return (rawArtist, corrected)
-                }
-                submitted += 1
+                // Final progress update
+                await MainActor.run { progress.processedFiles = artistCorrections.count }
             }
-
-            // Collect remaining
-            for await result in group {
-                if let (raw, corrected) = result {
-                    artistCorrections[raw] = corrected
-                }
-            }
-
-            // Final progress update
-            await MainActor.run { progress.processedFiles = artistCorrections.count }
         }
 
         try Task.checkCancellation()
 
         // Phase 6: Fetch corrections for unique albums (parallel with rate limiting)
+        // Optimization: Check cache first to skip API calls on rescan
         var albumCorrections: [String: String] = [:]
+        let cachedAlbums = await theAudioDB.getCachedAlbumKeys()
+        let uncachedAlbums = uniqueAlbums.subtracting(cachedAlbums)
+
         progress.totalFiles = uniqueAlbums.count
         progress.processedFiles = 0
 
-        await withTaskGroup(of: (String, String)?.self) { group in
-            var submitted = 0
-            let albumArray = Array(uniqueAlbums)
-
-            for albumKey in albumArray {
+        if uncachedAlbums.isEmpty {
+            // All albums are cached - fast path
+            print("✅ All \(uniqueAlbums.count) albums found in cache")
+            for albumKey in uniqueAlbums {
                 let parts = albumKey.split(separator: "|", maxSplits: 1)
                 guard parts.count == 2, let firstPart = parts.first else { continue }
                 let rawArtist = String(firstPart)
                 let rawAlbum = String(parts[1])
                 let correctedArtist = artistCorrections[rawArtist] ?? rawArtist
 
-                if submitted >= Self.maxConcurrentAPILookups {
-                    if let result = await group.next(), let (key, corrected) = result {
+                let albumInfo = await theAudioDB.fetchAlbumInfo(artist: correctedArtist, album: rawAlbum)  // Returns from cache
+                albumCorrections[albumKey] = albumInfo.name ?? rawAlbum
+            }
+            await MainActor.run { progress.processedFiles = albumCorrections.count }
+        } else {
+            // Some albums need API lookup
+            print("📡 Fetching \(uncachedAlbums.count) uncached albums (\(cachedAlbums.count) cached)")
+
+            await withTaskGroup(of: (String, String)?.self) { group in
+                var submitted = 0
+                let albumArray = Array(uniqueAlbums)
+
+                for albumKey in albumArray {
+                    let parts = albumKey.split(separator: "|", maxSplits: 1)
+                    guard parts.count == 2, let firstPart = parts.first else { continue }
+                    let rawArtist = String(firstPart)
+                    let rawAlbum = String(parts[1])
+                    let correctedArtist = artistCorrections[rawArtist] ?? rawArtist
+
+                    if submitted >= Self.maxConcurrentAPILookups {
+                        if let result = await group.next(), let (key, corrected) = result {
+                            albumCorrections[key] = corrected
+                            await MainActor.run { progress.processedFiles += 1 }
+                        }
+                    }
+
+                    group.addTask {
+                        if Task.isCancelled { return nil }
+                        let albumInfo = await theAudioDB.fetchAlbumInfo(artist: correctedArtist, album: rawAlbum)
+                        return (albumKey, albumInfo.name ?? rawAlbum)
+                    }
+                    submitted += 1
+                }
+
+                // Collect remaining
+                for await result in group {
+                    if let (key, corrected) = result {
                         albumCorrections[key] = corrected
-                        await MainActor.run { progress.processedFiles += 1 }
                     }
                 }
 
-                group.addTask {
-                    if Task.isCancelled { return nil }
-                    let albumInfo = await theAudioDB.fetchAlbumInfo(artist: correctedArtist, album: rawAlbum)
-                    return (albumKey, albumInfo.name ?? rawAlbum)
-                }
-                submitted += 1
+                // Final progress update
+                await MainActor.run { progress.processedFiles = albumCorrections.count }
             }
-
-            // Collect remaining
-            for await result in group {
-                if let (key, corrected) = result {
-                    albumCorrections[key] = corrected
-                }
-            }
-
-            // Final progress update
-            await MainActor.run { progress.processedFiles = albumCorrections.count }
         }
 
         // Phase 7: Build preview items (fast, in-memory)
@@ -356,8 +448,9 @@ class MusicUploader {
             }
         }
 
-        // Save metadata cache for future scans
+        // Save caches for future scans
         await metadataExtractor.saveCache()
+        await theAudioDB.saveCache()
 
         progress.phase = .idle
         return UploadPreview(newFiles: newFiles, skippedFiles: skippedFiles)
@@ -555,6 +648,15 @@ class MusicUploader {
         progress.phase = .buildingCatalog
         let (catalogArtists, totalTracks) = await catalogBuilder.build(from: processedTracks)
 
+        // Save external API caches for future scans
+        await theAudioDB.saveCache()
+        if let mb = musicBrainz {
+            await mb.saveCache()
+        }
+        if let lfm = lastFM {
+            await lfm.saveCache()
+        }
+
         try Task.checkCancellation()
 
         // Phase: Save to SwiftData and upload catalog.json to CDN
@@ -746,6 +848,15 @@ class MusicUploader {
         // Phase 4: Build catalog
         progress.phase = .buildingCatalog
         let (catalogArtists, totalTracks) = await catalogBuilder.build(from: processedTracks)
+
+        // Save external API caches for future scans
+        await theAudioDB.saveCache()
+        if let mb = musicBrainz {
+            await mb.saveCache()
+        }
+        if let lfm = lastFM {
+            await lfm.saveCache()
+        }
 
         try Task.checkCancellation()
 
@@ -1026,16 +1137,12 @@ class MusicUploader {
         encoder.dateEncodingStrategy = .iso8601
         let catalogData = try encoder.encode(catalog)
 
-        // Gzip compress for smaller transfer (~70-80% reduction)
-        let compressedData = try (catalogData as NSData).compressed(using: .zlib) as Data
-
         _ = try await storageService.forceUploadData(
-            compressedData,
+            catalogData,
             s3Key: "catalog.json",
-            contentType: "application/json",
-            contentEncoding: "gzip"
+            contentType: "application/json"
         )
-        print("✅ Uploaded catalog.json to CDN (compressed: \(compressedData.count) bytes from \(catalogData.count) bytes)")
+        print("✅ Uploaded catalog.json to CDN (\(catalogData.count) bytes)")
 
         // Save CDN settings to iCloud for iOS to discover
         let store = NSUbiquitousKeyValueStore.default

@@ -73,24 +73,40 @@ struct ArtworkImage: View {
                 placeholderView
             }
         }
-        .task(id: effectiveURL) {
+        .task(id: url) {
             await loadImageAsync()
+        }
+        .onChange(of: url) { _, _ in
+            cachedLocalURL = nil
+            loadedImage = nil
+            hasTriggeredDownload = false
         }
         .animation(.easeInOut(duration: 0.2), value: loadedImage != nil)
     }
 
     private func loadImageAsync() async {
-        guard let url = effectiveURL else {
-            loadedImage = nil
+        // Compute effective URL fresh (prefer localURL, then check cache)
+        let urlToLoad: URL?
+        if let local = localURL {
+            urlToLoad = local
+        } else if let urlString = url,
+                  let cacheService = cacheService,
+                  let cached = cacheService.localArtworkURL(for: urlString) {
+            await MainActor.run { cachedLocalURL = cached }
+            urlToLoad = cached
+        } else {
+            urlToLoad = nil
+        }
+
+        guard let loadURL = urlToLoad else {
+            await MainActor.run { loadedImage = nil }
             return
         }
 
-        isLoading = true
-        defer { isLoading = false }
+        await MainActor.run { isLoading = true }
 
-        // Load off main thread
         let image = await Task.detached(priority: .userInitiated) {
-            guard let data = try? Data(contentsOf: url) else { return nil as PlatformImage? }
+            guard let data = try? Data(contentsOf: loadURL) else { return nil as PlatformImage? }
             #if os(iOS)
             return UIImage(data: data)
             #else
@@ -100,6 +116,7 @@ struct ArtworkImage: View {
 
         await MainActor.run {
             loadedImage = image
+            isLoading = false
         }
     }
 

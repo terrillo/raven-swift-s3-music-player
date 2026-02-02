@@ -58,12 +58,14 @@ frontend/Music/
 │       └── LastFMService.swift           # Album metadata fallback
 ├── Views/
 │   ├── ContentView.swift                 # TabView (iOS) / NavigationSplitView (macOS)
+│   ├── HomeView.swift                    # iOS home screen with curated sections
 │   ├── ArtistsView.swift                 # Artist list, ArtistDetailView, AlbumDetailView
 │   ├── AlbumsView.swift                  # Album browsing
 │   ├── SongsView.swift                   # All songs with SongRow
 │   ├── GenreView.swift                   # Genre browsing
 │   ├── SearchView.swift                  # Global search
 │   ├── PlaylistView.swift                # Auto-generated playlists
+│   ├── RadioView.swift                   # Radio mode with seed selection
 │   ├── NowPlayingSheet.swift             # Full-screen player
 │   ├── NowPlayingAccessory.swift         # iOS 18 tab bar mini-player
 │   ├── SidebarNowPlaying.swift           # macOS sidebar player
@@ -160,7 +162,19 @@ The `Services/Upload/` directory contains the complete upload pipeline:
 - Platform-specific code: `#if os(iOS)` / `#if os(macOS)`
 - `@AppStorage` for view preferences (grid/list mode)
 - Tab bar uses `.tabViewBottomAccessory` for Now Playing (iOS 18+)
+- iOS 26 Liquid Glass: `.glassEffect(.regular.interactive())` with `.ultraThinMaterial` fallback
 - macOS sidebar uses `.safeAreaInset(edge: .bottom)` for Now Playing
+
+### iOS Tab Structure
+
+iOS uses a 5-tab layout with HomeView as the primary landing screen:
+- **Home**: Curated sections (Top Tracks, Recently Added, Genre chips)
+- **Songs**: All tracks alphabetically
+- **Artists**: Artist browsing with grid/list toggle
+- **Playlists**: Favorites, auto-playlists, statistics
+- **Radio**: Radio mode with genre/mood/artist seeds
+
+Settings is accessible via the cloud icon in HomeView's toolbar (opens as a sheet).
 
 ### Playback Behavior
 

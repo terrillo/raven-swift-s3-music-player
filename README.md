@@ -31,11 +31,13 @@ Intelligent shuffle that learns your listening habits:
 - **Time-of-day patterns**: Learns what you listen to at different times
 
 ### Browsing & Discovery
+- **Home View** (iOS): Curated landing screen with Top Tracks, Recently Added, and genre chips
 - **Artists View**: Browse all artists with grid or list layout toggle
 - **Albums View**: Browse all albums with grid or list layout toggle
 - **Songs View**: Full track listing with cache status indicators
 - **Genres View**: Browse by genre with drill-down to matching tracks
-- **Auto-Playlists**: Top 100 tracks by play count
+- **Radio Mode**: Start radio from track, genre, mood, or favorite artists
+- **Auto-Playlists**: Top 100 tracks by play count, Recently Added
 - Artist detail pages with bio, albums, and track listings
 - Album detail pages with artwork, track listing, and metadata
 
@@ -73,8 +75,8 @@ Intelligent shuffle that learns your listening habits:
 - Credentials stored securely in macOS Keychain
 
 ### Platform-Specific
-- **iOS**: Tab-based navigation, iOS 18 tab bar mini-player
-- **macOS**: NavigationSplitView with three-column layout, sidebar player
+- **iOS**: HomeView as primary landing screen, 5-tab navigation (Home, Songs, Artists, Playlists, Radio), iOS 18 tab bar mini-player, iOS 26 Liquid Glass design
+- **macOS**: NavigationSplitView with three-column layout, sidebar player, dedicated Upload and Settings tabs
 - View mode preferences (grid/list) persist via `@AppStorage`
 
 ## Prerequisites
@@ -193,9 +195,11 @@ Music/
 │       │       └── LastFMService.swift           # Fallback metadata
 │       └── Views/
 │           ├── ContentView.swift                 # TabView / NavigationSplitView
+│           ├── HomeView.swift                    # iOS home screen (curated sections)
 │           ├── ArtistsView.swift
 │           ├── AlbumsView.swift
 │           ├── SongsView.swift
+│           ├── RadioView.swift                   # Radio mode
 │           ├── NowPlayingSheet.swift
 │           ├── SettingsView.swift
 │           └── UploadView.swift                  # macOS-only

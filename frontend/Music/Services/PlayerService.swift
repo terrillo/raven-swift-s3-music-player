@@ -37,6 +37,13 @@ class PlayerService {
     private var recentAlbums: [String] = []
     private let recencyWindowSize = 5
 
+    // Previous track tracking for affinity analysis
+    private var previousTrackS3Key: String?
+
+    // Radio mode
+    var radioService: RadioService?
+    var isRadioMode: Bool { radioService?.isActive ?? false }
+
     // Ordered play history for the session (most recent at end)
     private(set) var playHistory: [Track] = []
     private var playHistoryIndex: Int = -1  // Current position in history (-1 = at end)
@@ -373,6 +380,9 @@ class PlayerService {
             updateSessionTracking(for: track)
         }
         setupPlayer()
+
+        // Check if radio queue needs replenishment
+        checkRadioReplenishment()
     }
 
     func previous() {
@@ -573,7 +583,9 @@ class PlayerService {
 
     private func recordPlayEvent() {
         guard let track = currentTrack else { return }
-        AnalyticsStore.shared.recordPlay(track: track, duration: currentTime, trackDuration: duration)
+        AnalyticsStore.shared.recordPlay(track: track, duration: currentTime, trackDuration: duration, previousTrackS3Key: previousTrackS3Key)
+        // Update previous track for next play event
+        previousTrackS3Key = track.s3Key
     }
 
     private func recordSkipEvent() {
@@ -644,6 +656,27 @@ class PlayerService {
         recentAlbums.removeAll()
         playHistory.removeAll()
         playHistoryIndex = -1
+        previousTrackS3Key = nil
+    }
+
+    // MARK: - Radio Mode
+
+    /// Start radio mode from a seed
+    func startRadio(from seed: RadioSeed, musicService: MusicService) {
+        let radio = RadioService(musicService: musicService, playerService: self)
+        self.radioService = radio
+        radio.startRadio(from: seed)
+    }
+
+    /// Stop radio mode
+    func stopRadio() {
+        radioService?.stopRadio()
+        radioService = nil
+    }
+
+    /// Check if radio queue needs replenishment (called after each track)
+    func checkRadioReplenishment() {
+        radioService?.checkAndReplenish()
     }
 
     /// Set up preview data for SwiftUI previews

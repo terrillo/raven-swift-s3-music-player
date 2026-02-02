@@ -11,17 +11,26 @@ import Foundation
 #if os(macOS)
 
 /// Artist metadata from TheAudioDB
-struct ArtistInfo {
+struct ArtistInfo: Codable {
     var name: String?       // Canonical artist name from TheAudioDB
     var bio: String?
     var imageUrl: String?
     var genre: String?
     var style: String?
     var mood: String?
+
+    init(name: String? = nil, bio: String? = nil, imageUrl: String? = nil, genre: String? = nil, style: String? = nil, mood: String? = nil) {
+        self.name = name
+        self.bio = bio
+        self.imageUrl = imageUrl
+        self.genre = genre
+        self.style = style
+        self.mood = mood
+    }
 }
 
 /// Album metadata from TheAudioDB
-struct AlbumInfo {
+struct AlbumInfo: Codable {
     var name: String?
     var imageUrl: String?
     var wiki: String?
@@ -30,21 +39,53 @@ struct AlbumInfo {
     var style: String?
     var mood: String?
     var theme: String?
+
+    init(name: String? = nil, imageUrl: String? = nil, wiki: String? = nil, releaseDate: Int? = nil, genre: String? = nil, style: String? = nil, mood: String? = nil, theme: String? = nil) {
+        self.name = name
+        self.imageUrl = imageUrl
+        self.wiki = wiki
+        self.releaseDate = releaseDate
+        self.genre = genre
+        self.style = style
+        self.mood = mood
+        self.theme = theme
+    }
 }
 
 /// Track metadata from TheAudioDB
-struct TrackInfo {
+struct TrackInfo: Codable {
     var name: String?
     var album: String?
     var genre: String?
     var style: String?
     var mood: String?
     var theme: String?
+
+    init(name: String? = nil, album: String? = nil, genre: String? = nil, style: String? = nil, mood: String? = nil, theme: String? = nil) {
+        self.name = name
+        self.album = album
+        self.genre = genre
+        self.style = style
+        self.mood = mood
+        self.theme = theme
+    }
+}
+
+/// Disk cache structure for TheAudioDB
+private struct TheAudioDBDiskCache: Codable {
+    var artists: [String: ArtistInfo]
+    var albums: [String: AlbumInfo]
+    var tracks: [String: TrackInfo]
 }
 
 actor TheAudioDBService {
     private static let baseURL = "https://www.theaudiodb.com/api/v1/json/123"
     private static let minRequestInterval: TimeInterval = 0.5  // 500ms between requests
+
+    private static var cacheFileURL: URL {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("theaudiodb_cache.json")
+    }
 
     private let storageService: StorageService?
     private var artistCache: [String: ArtistInfo] = [:]
@@ -63,6 +104,58 @@ actor TheAudioDBService {
 
     init(storageService: StorageService? = nil) {
         self.storageService = storageService
+
+        // Load disk cache on init
+        if let cache = Self.loadCacheFromDisk() {
+            artistCache = cache.artists
+            albumCache = cache.albums
+            trackCache = cache.tracks
+        }
+    }
+
+    // MARK: - Disk Cache
+
+    private static func loadCacheFromDisk() -> TheAudioDBDiskCache? {
+        guard FileManager.default.fileExists(atPath: cacheFileURL.path) else { return nil }
+
+        do {
+            let data = try Data(contentsOf: cacheFileURL)
+            let cache = try JSONDecoder().decode(TheAudioDBDiskCache.self, from: data)
+            print("📀 Loaded TheAudioDB cache: \(cache.artists.count) artists, \(cache.albums.count) albums, \(cache.tracks.count) tracks")
+            return cache
+        } catch {
+            print("⚠️ Failed to load TheAudioDB cache: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    func saveCache() {
+        let cache = TheAudioDBDiskCache(artists: artistCache, albums: albumCache, tracks: trackCache)
+
+        do {
+            let data = try JSONEncoder().encode(cache)
+            try data.write(to: Self.cacheFileURL)
+            print("💾 Saved TheAudioDB cache: \(artistCache.count) artists, \(albumCache.count) albums, \(trackCache.count) tracks")
+        } catch {
+            print("⚠️ Failed to save TheAudioDB cache: \(error.localizedDescription)")
+        }
+    }
+
+    // MARK: - Cache Inspection
+
+    /// Returns set of artist names that are cached
+    func getCachedArtistKeys() -> Set<String> {
+        Set(artistCache.keys)
+    }
+
+    /// Returns set of album keys (artist|album format) that are cached
+    func getCachedAlbumKeys() -> Set<String> {
+        Set(albumCache.keys)
+    }
+
+    /// Returns cache statistics for debugging
+    func cacheStats() -> String {
+        "TheAudioDB: \(artistCache.count) artists, \(albumCache.count) albums, \(trackCache.count) tracks"
     }
 
     // MARK: - Rate Limiting

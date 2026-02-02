@@ -14,6 +14,11 @@ actor LastFMService {
     private static let baseURL = "https://ws.audioscrobbler.com/2.0/"
     private static let minRequestInterval: TimeInterval = 0.25  // 250ms between requests
 
+    private static var cacheFileURL: URL {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("lastfm_cache.json")
+    }
+
     private let apiKey: String
     private let storageService: StorageService?
     private var albumCache: [String: AlbumInfo] = [:]  // Key: "artist|album"
@@ -30,9 +35,52 @@ actor LastFMService {
     init(apiKey: String, storageService: StorageService? = nil) {
         self.apiKey = apiKey
         self.storageService = storageService
+
+        // Load disk cache on init
+        if let cache = Self.loadCacheFromDisk() {
+            albumCache = cache
+        }
     }
 
     var isEnabled: Bool { !apiKey.isEmpty }
+
+    // MARK: - Disk Cache
+
+    private static func loadCacheFromDisk() -> [String: AlbumInfo]? {
+        guard FileManager.default.fileExists(atPath: cacheFileURL.path) else { return nil }
+
+        do {
+            let data = try Data(contentsOf: cacheFileURL)
+            let cache = try JSONDecoder().decode([String: AlbumInfo].self, from: data)
+            print("📀 Loaded LastFM cache: \(cache.count) albums")
+            return cache
+        } catch {
+            print("⚠️ Failed to load LastFM cache: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    func saveCache() {
+        do {
+            let data = try JSONEncoder().encode(albumCache)
+            try data.write(to: Self.cacheFileURL)
+            print("💾 Saved LastFM cache: \(albumCache.count) albums")
+        } catch {
+            print("⚠️ Failed to save LastFM cache: \(error.localizedDescription)")
+        }
+    }
+
+    // MARK: - Cache Inspection
+
+    /// Returns set of album keys (artist|album format) that are cached
+    func getCachedAlbumKeys() -> Set<String> {
+        Set(albumCache.keys)
+    }
+
+    /// Returns cache statistics for debugging
+    func cacheStats() -> String {
+        "LastFM: \(albumCache.count) albums"
+    }
 
     // MARK: - Rate Limiting
 

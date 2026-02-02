@@ -11,7 +11,7 @@ import Foundation
 #if os(macOS)
 
 /// Detailed artist information from MusicBrainz
-struct ArtistDetails {
+struct ArtistDetails: Codable {
     var mbid: String?
     var name: String?
     var artistType: String?  // person, group, orchestra, choir, etc.
@@ -20,10 +20,21 @@ struct ArtistDetails {
     var endDate: String?     // dissolution or death date
     var disambiguation: String?  // clarifying text
     var tags: [String] = []
+
+    init(mbid: String? = nil, name: String? = nil, artistType: String? = nil, area: String? = nil, beginDate: String? = nil, endDate: String? = nil, disambiguation: String? = nil, tags: [String] = []) {
+        self.mbid = mbid
+        self.name = name
+        self.artistType = artistType
+        self.area = area
+        self.beginDate = beginDate
+        self.endDate = endDate
+        self.disambiguation = disambiguation
+        self.tags = tags
+    }
 }
 
 /// Detailed release information from MusicBrainz
-struct ReleaseDetails {
+struct ReleaseDetails: Codable {
     var mbid: String?
     var title: String?
     var releaseDate: Int?
@@ -33,11 +44,40 @@ struct ReleaseDetails {
     var barcode: String?
     var mediaFormat: String?  // CD, vinyl, digital
     var tags: [String] = []
+
+    init(mbid: String? = nil, title: String? = nil, releaseDate: Int? = nil, releaseType: String? = nil, country: String? = nil, label: String? = nil, barcode: String? = nil, mediaFormat: String? = nil, tags: [String] = []) {
+        self.mbid = mbid
+        self.title = title
+        self.releaseDate = releaseDate
+        self.releaseType = releaseType
+        self.country = country
+        self.label = label
+        self.barcode = barcode
+        self.mediaFormat = mediaFormat
+        self.tags = tags
+    }
+}
+
+/// Wrapper for optional String to support Codable
+private struct OptionalString: Codable {
+    var value: String?
+}
+
+/// Disk cache structure for MusicBrainz
+private struct MusicBrainzDiskCache: Codable {
+    var artistMBIDs: [String: OptionalString]  // Wraps String? for Codable
+    var artistDetails: [String: ArtistDetails]
+    var releases: [String: ReleaseDetails]
 }
 
 actor MusicBrainzService {
     private static let baseURL = "https://musicbrainz.org/ws/2"
     private static let minRequestInterval: TimeInterval = 1.0  // 1 request per second
+
+    private static var cacheFileURL: URL {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("musicbrainz_cache.json")
+    }
 
     private let userAgent: String
     private let enabled: Bool
@@ -57,9 +97,62 @@ actor MusicBrainzService {
     init(contact: String, enabled: Bool = true) {
         self.userAgent = "MusicApp/1.0 (\(contact))"
         self.enabled = enabled && !contact.isEmpty
+
+        // Load disk cache on init
+        if let cache = Self.loadCacheFromDisk() {
+            artistMBIDCache = cache.artistMBIDs.mapValues { $0.value }
+            artistDetailsCache = cache.artistDetails
+            releaseCache = cache.releases
+        }
     }
 
     var isEnabled: Bool { enabled }
+
+    // MARK: - Disk Cache
+
+    private static func loadCacheFromDisk() -> MusicBrainzDiskCache? {
+        guard FileManager.default.fileExists(atPath: cacheFileURL.path) else { return nil }
+
+        do {
+            let data = try Data(contentsOf: cacheFileURL)
+            let cache = try JSONDecoder().decode(MusicBrainzDiskCache.self, from: data)
+            print("📀 Loaded MusicBrainz cache: \(cache.artistMBIDs.count) MBIDs, \(cache.artistDetails.count) artists, \(cache.releases.count) releases")
+            return cache
+        } catch {
+            print("⚠️ Failed to load MusicBrainz cache: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    func saveCache() {
+        let wrappedMBIDs = artistMBIDCache.mapValues { OptionalString(value: $0) }
+        let cache = MusicBrainzDiskCache(artistMBIDs: wrappedMBIDs, artistDetails: artistDetailsCache, releases: releaseCache)
+
+        do {
+            let data = try JSONEncoder().encode(cache)
+            try data.write(to: Self.cacheFileURL)
+            print("💾 Saved MusicBrainz cache: \(artistMBIDCache.count) MBIDs, \(artistDetailsCache.count) artists, \(releaseCache.count) releases")
+        } catch {
+            print("⚠️ Failed to save MusicBrainz cache: \(error.localizedDescription)")
+        }
+    }
+
+    // MARK: - Cache Inspection
+
+    /// Returns set of artist names that are cached
+    func getCachedArtistKeys() -> Set<String> {
+        Set(artistDetailsCache.keys)
+    }
+
+    /// Returns set of album keys (artist|album format) that are cached
+    func getCachedAlbumKeys() -> Set<String> {
+        Set(releaseCache.keys)
+    }
+
+    /// Returns cache statistics for debugging
+    func cacheStats() -> String {
+        "MusicBrainz: \(artistMBIDCache.count) MBIDs, \(artistDetailsCache.count) artists, \(releaseCache.count) releases"
+    }
 
     // MARK: - Rate Limiting
 
