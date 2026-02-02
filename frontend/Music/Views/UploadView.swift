@@ -223,6 +223,14 @@ struct UploadView: View {
                     .foregroundStyle(.secondary)
             }
 
+            // Show discovered files during scanning phase
+            if uploader.progress.phase == .scanning && uploader.progress.discoveredFiles > 0 {
+                Text("Found \(uploader.progress.discoveredFiles) audio files...")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+
             // Progress bar (during fetchingMetadata phase)
             if uploader.progress.phase == .fetchingMetadata && uploader.progress.totalFiles > 0 {
                 ProgressView(value: uploader.progress.progress)

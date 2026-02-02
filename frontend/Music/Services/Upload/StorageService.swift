@@ -185,12 +185,12 @@ actor StorageService {
     }
 
     /// Force upload data, overwriting if exists. Used for catalog.json.
-    func forceUploadData(_ data: Data, s3Key: String, contentType: String) async throws -> String {
+    func forceUploadData(_ data: Data, s3Key: String, contentType: String, contentEncoding: String? = nil) async throws -> String {
         let maxRetries = 3
 
         for attempt in 0..<maxRetries {
             do {
-                try await performUpload(data: data, s3Key: s3Key, contentType: contentType)
+                try await performUpload(data: data, s3Key: s3Key, contentType: contentType, contentEncoding: contentEncoding)
                 existingKeysCache?.insert(s3Key)
                 return getPublicURL(for: s3Key)
             } catch {
@@ -206,7 +206,7 @@ actor StorageService {
         throw StorageError.uploadFailed("Max retries exceeded")
     }
 
-    private func performUpload(data: Data, s3Key: String, contentType: String) async throws {
+    private func performUpload(data: Data, s3Key: String, contentType: String, contentEncoding: String? = nil) async throws {
         // Virtual-hosted style: bucket in hostname, key in path
         let fullPath = "/\(prefixedKey(s3Key))"
         guard let encodedPath = fullPath.addingPercentEncoding(withAllowedCharacters: .s3PathAllowed),
@@ -218,13 +218,19 @@ actor StorageService {
         request.httpMethod = "PUT"
         request.setValue(contentType, forHTTPHeaderField: "Content-Type")
         request.setValue("public-read", forHTTPHeaderField: "x-amz-acl")
+        if let encoding = contentEncoding {
+            request.setValue(encoding, forHTTPHeaderField: "Content-Encoding")
+        }
         request.httpBody = data
 
         let payloadHash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-        let headers = [
+        var headers = [
             "Content-Type": contentType,
             "x-amz-acl": "public-read"
         ]
+        if let encoding = contentEncoding {
+            headers["Content-Encoding"] = encoding
+        }
         signRequest(&request, method: "PUT", headers: headers, payloadHash: payloadHash)
 
         let (responseData, response) = try await URLSession.shared.data(for: request)

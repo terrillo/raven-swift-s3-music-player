@@ -45,17 +45,25 @@ actor CatalogBuilder {
     private let musicBrainz: MusicBrainzService?
     private let lastFM: LastFMService?
     private let storageService: StorageService
+    private let cdnBaseURL: String  // Store CDN URL for sync access (avoids actor hops)
 
     init(
         theAudioDB: TheAudioDBService,
         musicBrainz: MusicBrainzService? = nil,
         lastFM: LastFMService? = nil,
-        storageService: StorageService
+        storageService: StorageService,
+        cdnBaseURL: String
     ) {
         self.theAudioDB = theAudioDB
         self.musicBrainz = musicBrainz
         self.lastFM = lastFM
         self.storageService = storageService
+        self.cdnBaseURL = cdnBaseURL
+    }
+
+    /// Sync URL generation (no actor hop needed)
+    private func getPublicURL(for s3Key: String) -> String {
+        "\(cdnBaseURL)/\(s3Key)"
     }
 
     /// Build catalog from processed tracks
@@ -83,15 +91,42 @@ actor CatalogBuilder {
             artistAlbums[artistKey]?[track.album]?.append(track)
         }
 
-        // Build catalog structure
-        var catalogArtists: [CatalogArtist] = []
+        // Build catalog structure - process artists in parallel
         let sortedArtistKeys = artistAlbums.keys.sorted()
+        let maxConcurrentArtists = 8
 
-        for artistKey in sortedArtistKeys {
-            let displayName = artistDisplayNames[artistKey] ?? artistKey
-            guard let albums = artistAlbums[artistKey] else { continue }
-            let artist = await buildArtist(name: displayName, albumsDict: albums)
-            catalogArtists.append(artist)
+        let catalogArtists: [CatalogArtist] = await withTaskGroup(of: (Int, CatalogArtist)?.self) { group in
+            var submitted = 0
+            var results: [(Int, CatalogArtist)] = []
+            results.reserveCapacity(sortedArtistKeys.count)
+
+            for (index, artistKey) in sortedArtistKeys.enumerated() {
+                let displayName = artistDisplayNames[artistKey] ?? artistKey
+                guard let albums = artistAlbums[artistKey] else { continue }
+
+                // Limit concurrent artist processing
+                if submitted >= maxConcurrentArtists {
+                    if let result = await group.next(), let r = result {
+                        results.append(r)
+                    }
+                }
+
+                group.addTask {
+                    let artist = await self.buildArtist(name: displayName, albumsDict: albums)
+                    return (index, artist)
+                }
+                submitted += 1
+            }
+
+            // Collect remaining results
+            for await result in group {
+                if let r = result {
+                    results.append(r)
+                }
+            }
+
+            // Sort by original index to maintain alphabetical order
+            return results.sorted { $0.0 < $1.0 }.map { $0.1 }
         }
 
         return (catalogArtists, tracks.count)
@@ -109,17 +144,35 @@ actor CatalogBuilder {
             artistDetails = await musicBrainz.getArtistDetails(name)
         }
 
-        // Build albums
-        var catalogAlbums: [CatalogAlbum] = []
-        for albumName in albumsDict.keys.sorted() {
-            guard let albumTracks = albumsDict[albumName] else { continue }
-            let album = await buildAlbum(
-                artistName: name,
-                albumName: albumName,
-                tracks: albumTracks,
-                artistGenre: artistInfo.genre
-            )
-            catalogAlbums.append(album)
+        // Build albums in parallel
+        let sortedAlbumNames = albumsDict.keys.sorted()
+
+        let catalogAlbums: [CatalogAlbum] = await withTaskGroup(of: (Int, CatalogAlbum)?.self) { group in
+            var results: [(Int, CatalogAlbum)] = []
+            results.reserveCapacity(sortedAlbumNames.count)
+
+            for (index, albumName) in sortedAlbumNames.enumerated() {
+                guard let albumTracks = albumsDict[albumName] else { continue }
+
+                group.addTask {
+                    let album = await self.buildAlbum(
+                        artistName: name,
+                        albumName: albumName,
+                        tracks: albumTracks,
+                        artistGenre: artistInfo.genre
+                    )
+                    return (index, album)
+                }
+            }
+
+            for await result in group {
+                if let r = result {
+                    results.append(r)
+                }
+            }
+
+            // Sort by original index to maintain album order
+            return results.sorted { $0.0 < $1.0 }.map { $0.1 }
         }
 
         let artistId = Identifiers.sanitizeS3Key(name)
@@ -163,12 +216,29 @@ actor CatalogBuilder {
         let localYear = sortedTracks.first?.year
         let localGenre = sortedTracks.first?.genre
 
-        // === Fetch metadata from all sources ===
+        // === Fetch metadata from all sources IN PARALLEL ===
 
-        // 1. TheAudioDB (primary source)
-        var albumInfo = await theAudioDB.fetchAlbumInfo(artist: artistName, album: albumName)
+        // Start all API lookups concurrently
+        async let albumInfoTask = theAudioDB.fetchAlbumInfo(artist: artistName, album: albumName)
+        async let releaseDetailsTask: ReleaseDetails? = {
+            if let musicBrainz = musicBrainz {
+                return await musicBrainz.getReleaseDetails(artist: artistName, album: albumName)
+            }
+            return nil
+        }()
+        async let lastFMInfoTask: AlbumInfo? = {
+            if let lastFM = lastFM {
+                return await lastFM.fetchAlbumInfo(artist: artistName, album: albumName)
+            }
+            return nil
+        }()
 
-        // If TheAudioDB doesn't have album by name, try track lookup
+        // Await all results concurrently
+        var albumInfo = await albumInfoTask
+        let releaseDetails = await releaseDetailsTask
+        let lastFMInfo = await lastFMInfoTask
+
+        // If TheAudioDB doesn't have album by name, try track lookup (sequential fallback)
         if albumInfo.name == nil, let firstTrack = sortedTracks.first {
             let trackInfo = await theAudioDB.fetchTrackInfo(artist: artistName, track: firstTrack.title)
             if let trackAlbum = trackInfo.album {
@@ -177,18 +247,6 @@ actor CatalogBuilder {
                     albumInfo = correctedAlbumInfo
                 }
             }
-        }
-
-        // 2. MusicBrainz (for release details)
-        var releaseDetails: ReleaseDetails?
-        if let musicBrainz = musicBrainz {
-            releaseDetails = await musicBrainz.getReleaseDetails(artist: artistName, album: albumName)
-        }
-
-        // 3. Last.fm (fallback for image/wiki)
-        var lastFMInfo: AlbumInfo?
-        if let lastFM = lastFM {
-            lastFMInfo = await lastFM.fetchAlbumInfo(artist: artistName, album: albumName)
         }
 
         // === Apply cascade for each field ===
@@ -236,8 +294,8 @@ actor CatalogBuilder {
             }
             seenS3Keys.insert(s3Key)
 
-            // Get URL for s3_key
-            let url = await storageService.getPublicURL(for: s3Key)
+            // Get URL for s3_key (sync, no actor hop needed)
+            let url = getPublicURL(for: s3Key)
 
             let catalogTrack = CatalogTrack(
                 s3Key: s3Key,

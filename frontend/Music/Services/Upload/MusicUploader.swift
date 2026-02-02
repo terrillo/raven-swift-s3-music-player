@@ -44,6 +44,7 @@ struct UploadProgress {
     var convertedFiles: Int
     var failedFiles: Int
     var currentFile: String?
+    var discoveredFiles: Int
 
     var progress: Double {
         guard totalFiles > 0 else { return 0 }
@@ -74,7 +75,8 @@ class MusicUploader {
         skippedFiles: 0,
         convertedFiles: 0,
         failedFiles: 0,
-        currentFile: nil
+        currentFile: nil,
+        discoveredFiles: 0
     )
 
     private(set) var isRunning = false
@@ -85,8 +87,9 @@ class MusicUploader {
     private var modelContext: ModelContext?
 
     private static let supportedExtensions = Set(["mp3", "m4a", "flac", "wav", "aac", "aiff"])
-    private static let maxConcurrentWorkers = 8
-    private static let maxConcurrentMetadataExtractors = 16  // Higher for local I/O
+    private static let maxConcurrentWorkers = 16  // Network I/O bound, can handle more parallelism
+    private static let maxConcurrentMetadataExtractors = 32  // Higher for modern Macs with SSDs and 8+ cores
+    private static let maxConcurrentAPILookups = 4  // Rate-limited external API lookups
 
     func configure(config: UploadConfiguration, modelContext: ModelContext) {
         self.config = config
@@ -111,7 +114,8 @@ class MusicUploader {
             skippedFiles: 0,
             convertedFiles: 0,
             failedFiles: 0,
-            currentFile: nil
+            currentFile: nil,
+            discoveredFiles: 0
         )
 
         uploadTask = Task {
@@ -153,7 +157,7 @@ class MusicUploader {
 
         // Phase 1: Scan for audio files
         progress.phase = .scanning
-        let audioFiles = try scanForAudioFiles(in: folderURL)
+        let audioFiles = try await scanForAudioFiles(in: folderURL)
 
         if audioFiles.isEmpty {
             throw UploaderError.noAudioFilesFound
@@ -169,17 +173,26 @@ class MusicUploader {
         progress.processedFiles = 0
         progress.currentFile = "Extracting metadata..."
 
-        // Parallel metadata extraction with limited concurrency
+        // Parallel metadata extraction with limited concurrency and batched progress updates
         let extractedMetadata: [(URL, TrackMetadata)] = await withTaskGroup(of: (URL, TrackMetadata)?.self) { group in
             var results: [(URL, TrackMetadata)] = []
             results.reserveCapacity(audioFiles.count)
             var submitted = 0
+            var completedSinceLastUpdate = 0
+            let progressUpdateInterval = 50  // Batch UI updates to reduce main thread contention
 
             for fileURL in audioFiles {
                 if submitted >= Self.maxConcurrentMetadataExtractors {
                     if let result = await group.next(), let r = result {
                         results.append(r)
-                        await MainActor.run { progress.processedFiles += 1 }
+                        completedSinceLastUpdate += 1
+
+                        // Batch progress updates
+                        if completedSinceLastUpdate >= progressUpdateInterval {
+                            let completed = results.count
+                            await MainActor.run { progress.processedFiles = completed }
+                            completedSinceLastUpdate = 0
+                        }
                     }
                 }
 
@@ -194,9 +207,11 @@ class MusicUploader {
             for await result in group {
                 if let r = result {
                     results.append(r)
-                    await MainActor.run { progress.processedFiles += 1 }
                 }
             }
+
+            // Final progress update
+            await MainActor.run { progress.processedFiles = results.count }
 
             return results
         }
@@ -218,38 +233,85 @@ class MusicUploader {
             uniqueAlbums.insert("\(rawArtist)|\(rawAlbum)")
         }
 
-        // Phase 5: Fetch corrections for unique artists (sequential due to rate limits)
+        // Phase 5: Fetch corrections for unique artists (parallel with rate limiting)
         var artistCorrections: [String: String] = [:]
         progress.totalFiles = uniqueArtists.count
         progress.processedFiles = 0
 
-        for rawArtist in uniqueArtists {
-            try Task.checkCancellation()
-            progress.currentFile = rawArtist
-            let artistInfo = await theAudioDB.fetchArtistInfo(rawArtist)
-            let corrected = artistInfo.name ?? Identifiers.normalizeArtistName(rawArtist) ?? rawArtist
-            artistCorrections[rawArtist] = corrected
-            progress.processedFiles += 1
+        await withTaskGroup(of: (String, String)?.self) { group in
+            var submitted = 0
+            let artistArray = Array(uniqueArtists)
+
+            for rawArtist in artistArray {
+                if submitted >= Self.maxConcurrentAPILookups {
+                    if let result = await group.next(), let (raw, corrected) = result {
+                        artistCorrections[raw] = corrected
+                        await MainActor.run { progress.processedFiles += 1 }
+                    }
+                }
+
+                group.addTask {
+                    if Task.isCancelled { return nil }
+                    let artistInfo = await theAudioDB.fetchArtistInfo(rawArtist)
+                    let corrected = artistInfo.name ?? Identifiers.normalizeArtistName(rawArtist) ?? rawArtist
+                    return (rawArtist, corrected)
+                }
+                submitted += 1
+            }
+
+            // Collect remaining
+            for await result in group {
+                if let (raw, corrected) = result {
+                    artistCorrections[raw] = corrected
+                }
+            }
+
+            // Final progress update
+            await MainActor.run { progress.processedFiles = artistCorrections.count }
         }
 
-        // Phase 6: Fetch corrections for unique albums
+        try Task.checkCancellation()
+
+        // Phase 6: Fetch corrections for unique albums (parallel with rate limiting)
         var albumCorrections: [String: String] = [:]
         progress.totalFiles = uniqueAlbums.count
         progress.processedFiles = 0
 
-        for albumKey in uniqueAlbums {
-            try Task.checkCancellation()
-            let parts = albumKey.split(separator: "|", maxSplits: 1)
-            guard parts.count == 2, let firstPart = parts.first else { continue }
-            let rawArtist = String(firstPart)
-            let rawAlbum = String(parts[1])
+        await withTaskGroup(of: (String, String)?.self) { group in
+            var submitted = 0
+            let albumArray = Array(uniqueAlbums)
 
-            let correctedArtist = artistCorrections[rawArtist] ?? rawArtist
-            progress.currentFile = "\(correctedArtist) - \(rawAlbum)"
+            for albumKey in albumArray {
+                let parts = albumKey.split(separator: "|", maxSplits: 1)
+                guard parts.count == 2, let firstPart = parts.first else { continue }
+                let rawArtist = String(firstPart)
+                let rawAlbum = String(parts[1])
+                let correctedArtist = artistCorrections[rawArtist] ?? rawArtist
 
-            let albumInfo = await theAudioDB.fetchAlbumInfo(artist: correctedArtist, album: rawAlbum)
-            albumCorrections[albumKey] = albumInfo.name ?? rawAlbum
-            progress.processedFiles += 1
+                if submitted >= Self.maxConcurrentAPILookups {
+                    if let result = await group.next(), let (key, corrected) = result {
+                        albumCorrections[key] = corrected
+                        await MainActor.run { progress.processedFiles += 1 }
+                    }
+                }
+
+                group.addTask {
+                    if Task.isCancelled { return nil }
+                    let albumInfo = await theAudioDB.fetchAlbumInfo(artist: correctedArtist, album: rawAlbum)
+                    return (albumKey, albumInfo.name ?? rawAlbum)
+                }
+                submitted += 1
+            }
+
+            // Collect remaining
+            for await result in group {
+                if let (key, corrected) = result {
+                    albumCorrections[key] = corrected
+                }
+            }
+
+            // Final progress update
+            await MainActor.run { progress.processedFiles = albumCorrections.count }
         }
 
         // Phase 7: Build preview items (fast, in-memory)
@@ -321,7 +383,8 @@ class MusicUploader {
             skippedFiles: preview.skippedFiles.count,
             convertedFiles: 0,
             failedFiles: 0,
-            currentFile: nil
+            currentFile: nil,
+            discoveredFiles: 0
         )
 
         uploadTask = Task {
@@ -352,7 +415,8 @@ class MusicUploader {
             theAudioDB: theAudioDB,
             musicBrainz: musicBrainz,
             lastFM: lastFM,
-            storageService: storageService
+            storageService: storageService,
+            cdnBaseURL: config.cdnBaseURL
         )
 
         // Build a lookup map from file path to preview item for quick access
@@ -377,10 +441,13 @@ class MusicUploader {
         progress.phase = .processing
         var processedTracks: [ProcessedTrack] = []
 
-        // Process new files (upload)
+        // Process new files (upload) with batched progress updates
         let results = try await withThrowingTaskGroup(of: ProcessedTrack?.self) { group in
             var submitted = 0
             var resultsArray: [ProcessedTrack] = []
+            resultsArray.reserveCapacity(preview.newFiles.count)
+            var completedSinceLastUpdate = 0
+            let progressUpdateInterval = 10  // Batch UI updates to reduce main thread contention
 
             for item in preview.newFiles {
                 // Limit concurrent workers
@@ -388,6 +455,14 @@ class MusicUploader {
                     if let result = try await group.next() {
                         if let track = result {
                             resultsArray.append(track)
+                        }
+                        completedSinceLastUpdate += 1
+
+                        // Batch progress updates
+                        if completedSinceLastUpdate >= progressUpdateInterval {
+                            let completed = resultsArray.count
+                            await MainActor.run { progress.processedFiles = completed }
+                            completedSinceLastUpdate = 0
                         }
                     }
                 }
@@ -415,47 +490,64 @@ class MusicUploader {
                 }
             }
 
+            // Final progress update
+            await MainActor.run { progress.processedFiles = resultsArray.count }
+
             return resultsArray
         }
 
         processedTracks = results
 
-        // Also add skipped files to the catalog (they're still part of the collection)
-        // Verify each skipped file still exists on remote before adding to catalog
-        for item in preview.skippedFiles {
-            // Verify file still exists on remote (may have been deleted between scan and upload)
-            let exists = await storageService.fileExists(item.s3Key)
-            if !exists {
-                print("⚠️ Skipped file no longer exists on remote: \(item.s3Key)")
-                continue
+        // Process skipped files in parallel (they're still part of the catalog)
+        // These files already exist on remote, just need metadata extraction
+        let skippedTracks = await withTaskGroup(of: ProcessedTrack?.self) { group in
+            for item in preview.skippedFiles {
+                group.addTask {
+                    // Verify file still exists on remote (may have been deleted between scan and upload)
+                    let exists = await storageService.fileExists(item.s3Key)
+                    if !exists {
+                        print("⚠️ Skipped file no longer exists on remote: \(item.s3Key)")
+                        return nil
+                    }
+
+                    let metadata = await metadataExtractor.extract(from: item.fileURL)
+                    let url = await storageService.getPublicURL(for: item.s3Key)
+
+                    // Preserve existing addedAt or use current date as fallback
+                    let addedAt = existingAddedAtMap[item.s3Key] ?? Date()
+
+                    return ProcessedTrack(
+                        title: item.title,
+                        artist: metadata.artist ?? item.artist,
+                        album: item.album,
+                        albumArtist: metadata.albumArtist,
+                        trackNumber: metadata.trackNumber,
+                        trackTotal: metadata.trackTotal,
+                        discNumber: metadata.discNumber,
+                        discTotal: metadata.discTotal,
+                        duration: metadata.duration,
+                        year: metadata.year,
+                        genre: metadata.genre,
+                        format: item.format,
+                        s3Key: item.s3Key,
+                        url: url,
+                        originalFormat: item.needsConversion ? item.fileURL.pathExtension.lowercased() : nil,
+                        addedAt: addedAt
+                    )
+                }
             }
 
-            let metadata = await metadataExtractor.extract(from: item.fileURL)
-            let url = await storageService.getPublicURL(for: item.s3Key)
-
-            // Preserve existing addedAt or use current date as fallback
-            let addedAt = existingAddedAtMap[item.s3Key] ?? Date()
-
-            let track = ProcessedTrack(
-                title: item.title,
-                artist: metadata.artist ?? item.artist,
-                album: item.album,
-                albumArtist: metadata.albumArtist,
-                trackNumber: metadata.trackNumber,
-                trackTotal: metadata.trackTotal,
-                discNumber: metadata.discNumber,
-                discTotal: metadata.discTotal,
-                duration: metadata.duration,
-                year: metadata.year,
-                genre: metadata.genre,
-                format: item.format,
-                s3Key: item.s3Key,
-                url: url,
-                originalFormat: item.needsConversion ? item.fileURL.pathExtension.lowercased() : nil,
-                addedAt: addedAt
-            )
-            processedTracks.append(track)
+            var results: [ProcessedTrack] = []
+            results.reserveCapacity(preview.skippedFiles.count)
+            for await result in group {
+                if let track = result {
+                    results.append(track)
+                }
+            }
+            return results
         }
+
+        processedTracks.append(contentsOf: skippedTracks)
 
         try Task.checkCancellation()
 
@@ -482,11 +574,6 @@ class MusicUploader {
     ) async -> ProcessedTrack? {
         let fileURL = previewItem.fileURL
         let s3Key = previewItem.s3Key
-
-        // Update progress on main thread
-        await MainActor.run {
-            progress.currentFile = fileURL.lastPathComponent
-        }
 
         // Extract full metadata for catalog
         let metadata = await metadataExtractor.extract(from: fileURL)
@@ -531,10 +618,6 @@ class MusicUploader {
             // Clean up converted file
             if wasConverted && uploadURL != fileURL {
                 try? FileManager.default.removeItem(at: uploadURL)
-            }
-
-            await MainActor.run {
-                progress.processedFiles += 1
             }
 
             // New uploads get current date, existing tracks preserve their addedAt
@@ -588,12 +671,13 @@ class MusicUploader {
             theAudioDB: theAudioDB,
             musicBrainz: musicBrainz,
             lastFM: lastFM,
-            storageService: storageService
+            storageService: storageService,
+            cdnBaseURL: config.cdnBaseURL
         )
 
         // Phase 1: Scan for audio files
         progress.phase = .scanning
-        let audioFiles = try scanForAudioFiles(in: folderURL)
+        let audioFiles = try await scanForAudioFiles(in: folderURL)
         progress.totalFiles = audioFiles.count
 
         if audioFiles.isEmpty {
@@ -672,25 +756,50 @@ class MusicUploader {
 
     // MARK: - Scan for Audio Files
 
-    private func scanForAudioFiles(in directory: URL) throws -> [URL] {
-        var audioFiles: [URL] = []
+    private func scanForAudioFiles(in directory: URL) async throws -> [URL] {
+        progress.discoveredFiles = 0
+        let supportedExts = Self.supportedExtensions
 
-        let resourceKeys: Set<URLResourceKey> = [.isDirectoryKey, .nameKey]
-        guard let enumerator = FileManager.default.enumerator(
-            at: directory,
-            includingPropertiesForKeys: Array(resourceKeys),
-            options: [.skipsHiddenFiles]
-        ) else {
-            throw UploaderError.cannotEnumerateDirectory
-        }
+        // Run enumeration on background thread for speed
+        let audioFiles = try await Task.detached {
+            var files: [URL] = []
+            files.reserveCapacity(10000)  // Pre-allocate for large libraries
 
-        for case let fileURL as URL in enumerator {
-            let ext = fileURL.pathExtension.lowercased()
-            if Self.supportedExtensions.contains(ext) {
-                audioFiles.append(fileURL)
+            let resourceKeys: Set<URLResourceKey> = [.isDirectoryKey]
+            guard let enumerator = FileManager.default.enumerator(
+                at: directory,
+                includingPropertiesForKeys: Array(resourceKeys),
+                options: [.skipsHiddenFiles, .skipsPackageDescendants]
+            ) else {
+                throw UploaderError.cannotEnumerateDirectory
             }
-        }
 
+            var count = 0
+            let updateInterval = 500  // Update UI every 500 files
+
+            for case let fileURL as URL in enumerator {
+                try Task.checkCancellation()
+
+                let ext = fileURL.pathExtension.lowercased()
+                if supportedExts.contains(ext) {
+                    files.append(fileURL)
+                    count += 1
+
+                    // Batch progress updates to reduce main thread hops
+                    if count % updateInterval == 0 {
+                        let currentCount = count
+                        await MainActor.run {
+                            self.progress.discoveredFiles = currentCount
+                        }
+                    }
+                }
+            }
+
+            return files
+        }.value
+
+        // Final progress update
+        progress.discoveredFiles = audioFiles.count
         return audioFiles
     }
 
@@ -913,16 +1022,20 @@ class MusicUploader {
         )
 
         let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.outputFormatting = [.sortedKeys]  // No pretty printing for smaller size
         encoder.dateEncodingStrategy = .iso8601
         let catalogData = try encoder.encode(catalog)
 
+        // Gzip compress for smaller transfer (~70-80% reduction)
+        let compressedData = try (catalogData as NSData).compressed(using: .zlib) as Data
+
         _ = try await storageService.forceUploadData(
-            catalogData,
+            compressedData,
             s3Key: "catalog.json",
-            contentType: "application/json"
+            contentType: "application/json",
+            contentEncoding: "gzip"
         )
-        print("✅ Uploaded catalog.json to CDN")
+        print("✅ Uploaded catalog.json to CDN (compressed: \(compressedData.count) bytes from \(catalogData.count) bytes)")
 
         // Save CDN settings to iCloud for iOS to discover
         let store = NSUbiquitousKeyValueStore.default
