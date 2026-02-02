@@ -20,6 +20,204 @@ struct SettingsView: View {
     @State private var showingClearImageCacheConfirmation = false
 
     var body: some View {
+        #if os(macOS)
+        macOSContent
+        #else
+        iOSContent
+        #endif
+    }
+
+    #if os(macOS)
+    private var macOSContent: some View {
+        ScrollView {
+            VStack(spacing: 24) {
+                // Playback Section
+                SettingsSection(title: "Playback", icon: "play.circle") {
+                    Toggle(isOn: $streamingModeEnabled) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Streaming Mode")
+                            Text("Play uncached tracks when online")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .toggleStyle(.switch)
+                }
+
+                // Storage Section
+                SettingsSection(title: "Storage", icon: "internaldrive") {
+                    HStack(spacing: 32) {
+                        StorageStatView(icon: "music.note", value: "\(cacheService.cachedTrackCount())", label: "Cached")
+                        StorageStatView(icon: "chart.pie", value: cacheService.formattedCacheSize(), label: "Size")
+                        StorageStatView(icon: "music.note.list", value: "\(musicService.songs.count)", label: "Total")
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+
+                    Divider()
+                        .padding(.vertical, 4)
+
+                    HStack(spacing: 12) {
+                        Button {
+                            showingCacheSheet = true
+                        } label: {
+                            Label("Cache All Music", systemImage: "arrow.down.circle")
+                        }
+                        .buttonStyle(.bordered)
+
+                        Button(role: .destructive) {
+                            showingClearConfirmation = true
+                        } label: {
+                            Label("Clear Music Cache", systemImage: "trash")
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
+
+                // Image Cache Section
+                SettingsSection(title: "Image Cache", icon: "photo.stack") {
+                    Toggle(isOn: $autoImageCachingEnabled) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Auto-Cache Images")
+                            Text("Save artwork for offline viewing")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .toggleStyle(.switch)
+
+                    Divider()
+                        .padding(.vertical, 4)
+
+                    HStack(spacing: 32) {
+                        StorageStatView(icon: "photo.on.rectangle", value: "\(cacheService.cachedArtworkCount())", label: "Images")
+                        StorageStatView(icon: "externaldrive", value: cacheService.formattedArtworkCacheSize(), label: "Size")
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+
+                    Button(role: .destructive) {
+                        showingClearImageCacheConfirmation = true
+                    } label: {
+                        Label("Clear Image Cache", systemImage: "photo.badge.minus")
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                // Sync Section
+                SettingsSection(title: "Sync", icon: "arrow.triangle.2.circlepath") {
+                    HStack {
+                        Button {
+                            Task {
+                                await musicService.loadCatalog(forceRefresh: true)
+                            }
+                        } label: {
+                            HStack {
+                                Label("Sync Catalog", systemImage: "arrow.triangle.2.circlepath")
+                                if musicService.isLoading {
+                                    ProgressView()
+                                        .scaleEffect(0.7)
+                                }
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(musicService.isLoading)
+
+                        Spacer()
+                    }
+
+                    HStack {
+                        Text("CDN Prefix")
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        TextField("music", text: $cdnPrefix)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 150)
+                            .onChange(of: cdnPrefix) { _, newValue in
+                                NSUbiquitousKeyValueStore.default.set(newValue, forKey: "cdnPrefix")
+                                NSUbiquitousKeyValueStore.default.synchronize()
+                            }
+                    }
+                    .padding(.top, 8)
+
+                    Text("Auto-synced from macOS uploader. Only change if you need to override.")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .padding(.top, 4)
+                }
+
+                // Danger Zone Section
+                SettingsSection(title: "Danger Zone", icon: "exclamationmark.triangle", iconColor: .red) {
+                    Button(role: .destructive) {
+                        showingDeleteAllConfirmation = true
+                    } label: {
+                        Label("Delete All Data", systemImage: "exclamationmark.triangle")
+                    }
+                    .buttonStyle(.bordered)
+
+                    Text("Deletes all cached music, artwork, and listening history from this device and iCloud.")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .padding(.top, 4)
+                }
+            }
+            .padding(24)
+            .frame(maxWidth: 600)
+            .frame(maxWidth: .infinity)
+        }
+        .navigationTitle("Settings")
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    showingSearch = true
+                } label: {
+                    Image(systemName: "magnifyingglass")
+                }
+            }
+        }
+        .sheet(isPresented: $showingCacheSheet) {
+            CacheDownloadView(
+                cacheService: cacheService,
+                tracks: musicService.songs,
+                artworkUrls: collectArtworkUrls(),
+                catalog: musicService.catalog
+            )
+        }
+        .confirmationDialog("Clear Cache", isPresented: $showingClearConfirmation) {
+            Button("Clear Cache", role: .destructive) {
+                Task {
+                    await cacheService.clearCache()
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This will delete all cached music and artwork. You'll need to download them again for offline playback.")
+        }
+        .confirmationDialog("Delete All Data", isPresented: $showingDeleteAllConfirmation) {
+            Button("Delete All Data", role: .destructive) {
+                Task {
+                    await cacheService.clearAllData()
+                    AnalyticsStore.shared.clearAllData()
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This will permanently delete all cached music, artwork, catalog data, and listening history from this device AND iCloud. This affects all devices using this iCloud account. This action cannot be undone.")
+        }
+        .confirmationDialog("Clear Image Cache", isPresented: $showingClearImageCacheConfirmation) {
+            Button("Clear Image Cache", role: .destructive) {
+                Task {
+                    await cacheService.clearArtworkCache()
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This will delete all cached images. They will be re-downloaded as you browse.")
+        }
+    }
+    #endif
+
+    private var iOSContent: some View {
         NavigationStack {
             List {
                 Section("Playback") {
@@ -213,10 +411,8 @@ struct SettingsView: View {
             }
             for album in artist.albums {
                 if let albumUrl = album.imageUrl {
-                    // Album has artwork - use it, skip embedded artwork from tracks
                     urls.insert(albumUrl)
                 } else {
-                    // No album artwork - collect embedded artwork from tracks
                     for track in album.tracks {
                         if let url = track.embeddedArtworkUrl {
                             urls.insert(url)
@@ -229,6 +425,53 @@ struct SettingsView: View {
         return Array(urls)
     }
 }
+
+// MARK: - macOS Helper Components
+
+#if os(macOS)
+private struct SettingsSection<Content: View>: View {
+    let title: String
+    let icon: String
+    var iconColor: Color = .appAccent
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label(title, systemImage: icon)
+                .font(.headline)
+                .foregroundStyle(iconColor)
+
+            VStack(alignment: .leading, spacing: 8) {
+                content
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.secondary.opacity(0.1))
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+        }
+    }
+}
+
+private struct StorageStatView: View {
+    let icon: String
+    let value: String
+    let label: String
+
+    var body: some View {
+        VStack(spacing: 4) {
+            Image(systemName: icon)
+                .font(.title2)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.title3)
+                .fontWeight(.semibold)
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+#endif
 
 #Preview {
     do {

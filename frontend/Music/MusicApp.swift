@@ -55,6 +55,9 @@ struct MusicApp: App {
             ContentView()
                 .preferredColorScheme(.dark)
                 .tint(.appAccent)
+                #if os(macOS)
+                .accentColor(Color.appAccent)
+                #endif
         }
         .modelContainer(sharedModelContainer)
     }
