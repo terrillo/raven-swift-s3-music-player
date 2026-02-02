@@ -184,6 +184,7 @@ struct Track: Codable, Identifiable {
     let channels: Int?
     let filesize: Int?
     let originalFormat: String?
+    let addedAt: Date?
 
     enum CodingKeys: String, CodingKey {
         case title, artist, album, duration, format, url, genre, style, mood, theme
@@ -196,6 +197,7 @@ struct Track: Codable, Identifiable {
         case discNumber = "disc_number"
         case discTotal = "disc_total"
         case originalFormat = "original_format"
+        case addedAt = "added_at"
     }
 
     init(
@@ -223,7 +225,8 @@ struct Track: Codable, Identifiable {
         samplerate: Int? = nil,
         channels: Int? = nil,
         filesize: Int? = nil,
-        originalFormat: String? = nil
+        originalFormat: String? = nil,
+        addedAt: Date? = nil
     ) {
         self.title = title
         self.artist = artist
@@ -250,6 +253,7 @@ struct Track: Codable, Identifiable {
         self.channels = channels
         self.filesize = filesize
         self.originalFormat = originalFormat
+        self.addedAt = addedAt
     }
 
     var formattedDuration: String {

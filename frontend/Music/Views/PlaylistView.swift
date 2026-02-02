@@ -47,6 +47,16 @@ struct PlaylistView: View {
 
                 Section("Auto Playlists") {
                     NavigationLink {
+                        RecentlyAddedView(
+                            musicService: musicService,
+                            playerService: playerService,
+                            cacheService: cacheService
+                        )
+                    } label: {
+                        Label("Recently Added", systemImage: "clock.arrow.circlepath")
+                    }
+
+                    NavigationLink {
                         Top100View(
                             musicService: musicService,
                             playerService: playerService,
@@ -273,6 +283,160 @@ struct FavoriteTracksView: View {
             }
         }
         .navigationTitle("Favorite Songs")
+    }
+}
+
+struct RecentlyAddedView: View {
+    var musicService: MusicService
+    var playerService: PlayerService
+    var cacheService: CacheService?
+
+    private var recentTracks: [Track] {
+        musicService.recentlyAddedSongs
+    }
+
+    private var firstPlayableTrack: Track? {
+        recentTracks.first { playerService.isTrackPlayable($0) }
+    }
+
+    private var hasPlayableTracks: Bool {
+        firstPlayableTrack != nil
+    }
+
+    var body: some View {
+        Group {
+            if recentTracks.isEmpty {
+                ContentUnavailableView(
+                    "No Recently Added Songs",
+                    systemImage: "clock.arrow.circlepath",
+                    description: Text("Songs you upload will appear here")
+                )
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        // Shuffle button
+                        Button {
+                            playerService.shufflePlay(queue: recentTracks)
+                        } label: {
+                            Label("Shuffle", systemImage: "shuffle")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(!hasPlayableTracks)
+                        .padding(.horizontal)
+                        .padding(.vertical, 8)
+
+                        Divider()
+
+                        ForEach(recentTracks) { track in
+                            let isPlayable = playerService.isTrackPlayable(track)
+                            Button {
+                                if isPlayable {
+                                    playerService.play(track: track, queue: recentTracks)
+                                }
+                            } label: {
+                                RecentlyAddedRow(
+                                    track: track,
+                                    playerService: playerService,
+                                    cacheService: cacheService,
+                                    isPlayable: isPlayable
+                                )
+                                .padding(.horizontal)
+                                .padding(.vertical, 8)
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(!isPlayable)
+
+                            Divider()
+                                .padding(.leading, 60)
+                        }
+                    }
+                }
+            }
+        }
+        .navigationTitle("Recently Added")
+    }
+}
+
+struct RecentlyAddedRow: View {
+    let track: Track
+    var playerService: PlayerService
+    var cacheService: CacheService?
+    var isPlayable: Bool = true
+
+    private var isCurrentTrack: Bool {
+        playerService.currentTrack?.id == track.id
+    }
+
+    private var isFavorite: Bool {
+        FavoritesStore.shared.isTrackFavorite(track.s3Key)
+    }
+
+    private var relativeDate: String {
+        guard let addedAt = track.addedAt else { return "" }
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        return formatter.localizedString(for: addedAt, relativeTo: Date())
+    }
+
+    var body: some View {
+        HStack {
+            // Album artwork with now playing indicator
+            ZStack {
+                ArtworkImage(
+                    url: track.embeddedArtworkUrl,
+                    size: 44,
+                    systemImage: "music.note",
+                    cacheService: cacheService
+                )
+
+                if isCurrentTrack {
+                    Color.black.opacity(0.4)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                    Image(systemName: playerService.isPlaying ? "speaker.wave.2.fill" : "speaker.fill")
+                        .foregroundStyle(.white)
+                }
+            }
+            .frame(width: 44, height: 44)
+
+            VStack(alignment: .leading) {
+                Text(track.title)
+                    .font(.headline)
+                    .foregroundStyle(isCurrentTrack ? Color.appAccent : (isPlayable ? .primary : .secondary))
+                HStack {
+                    if let artist = track.artist {
+                        Text(artist)
+                    }
+                    if !relativeDate.isEmpty {
+                        Text("•")
+                        Text(relativeDate)
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            Button {
+                FavoritesStore.shared.toggleTrackFavorite(track)
+            } label: {
+                Image(systemName: isFavorite ? "heart.fill" : "heart")
+                    .foregroundStyle(isFavorite ? .pink : .secondary)
+            }
+            .buttonStyle(.plain)
+
+            if !isPlayable {
+                Image(systemName: "arrow.down.circle")
+                    .foregroundStyle(.secondary)
+                    .font(.caption)
+            }
+
+            Text(track.formattedDuration)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .opacity(isPlayable ? 1.0 : 0.5)
     }
 }
 

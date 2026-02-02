@@ -37,6 +37,7 @@ struct ProcessedTrack {
     var url: String?
     var embeddedArtworkUrl: String?
     var originalFormat: String?
+    var addedAt: Date?
 }
 
 actor CatalogBuilder {
@@ -263,7 +264,8 @@ actor CatalogBuilder {
                 samplerate: track.samplerate,
                 channels: track.channels,
                 filesize: track.filesize,
-                originalFormat: track.originalFormat
+                originalFormat: track.originalFormat,
+                addedAt: track.addedAt
             )
             catalogTracks.append(catalogTrack)
         }

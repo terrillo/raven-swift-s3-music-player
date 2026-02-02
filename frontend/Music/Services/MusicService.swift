@@ -43,6 +43,7 @@ class MusicService {
     private var _cachedArtists: [Artist]?
     private var _artistByName: [String: Artist]?
     private var _trackByS3Key: [String: Track]?
+    private var _cachedRecentlyAdded: [Track]?
 
     /// Whether the catalog is empty (no music uploaded yet)
     var isEmpty: Bool {
@@ -119,6 +120,18 @@ class MusicService {
         return map
     }
 
+    /// 20 most recently added songs, sorted by addedAt descending
+    var recentlyAddedSongs: [Track] {
+        if let cached = _cachedRecentlyAdded { return cached }
+        let sorted = songs
+            .filter { $0.addedAt != nil }
+            .sorted { ($0.addedAt ?? .distantPast) > ($1.addedAt ?? .distantPast) }
+            .prefix(20)
+        let result = Array(sorted)
+        _cachedRecentlyAdded = result
+        return result
+    }
+
     func configure(modelContext: ModelContext) {
         self.modelContext = modelContext
     }
@@ -129,6 +142,7 @@ class MusicService {
         _cachedArtists = nil
         _artistByName = nil
         _trackByS3Key = nil
+        _cachedRecentlyAdded = nil
     }
 
     private func primaryArtistName(_ name: String) -> String {
@@ -227,7 +241,9 @@ class MusicService {
                 return
             }
 
-            let remoteCatalog = try JSONDecoder().decode(MusicCatalog.self, from: data)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let remoteCatalog = try decoder.decode(MusicCatalog.self, from: data)
 
             // Save to SwiftData for offline access
             await saveCatalogToSwiftData(remoteCatalog)
@@ -315,7 +331,8 @@ class MusicService {
                         samplerate: track.samplerate,
                         channels: track.channels,
                         filesize: track.filesize,
-                        originalFormat: track.originalFormat
+                        originalFormat: track.originalFormat,
+                        addedAt: track.addedAt
                     )
                     catalogTrack.catalogAlbum = catalogAlbum
                     if catalogAlbum.tracks == nil { catalogAlbum.tracks = [] }

@@ -191,6 +191,7 @@ final class CatalogTrack {
     var channels: Int?
     var filesize: Int?
     var originalFormat: String?
+    var addedAt: Date?
     var updatedAt: Date = Date()
 
     var catalogAlbum: CatalogAlbum?
@@ -220,7 +221,8 @@ final class CatalogTrack {
         samplerate: Int? = nil,
         channels: Int? = nil,
         filesize: Int? = nil,
-        originalFormat: String? = nil
+        originalFormat: String? = nil,
+        addedAt: Date? = nil
     ) {
         self.s3Key = s3Key
         self.title = title
@@ -247,6 +249,7 @@ final class CatalogTrack {
         self.channels = channels
         self.filesize = filesize
         self.originalFormat = originalFormat
+        self.addedAt = addedAt
         self.updatedAt = Date()
     }
 
@@ -277,7 +280,8 @@ final class CatalogTrack {
             samplerate: samplerate,
             channels: channels,
             filesize: filesize,
-            originalFormat: originalFormat
+            originalFormat: originalFormat,
+            addedAt: addedAt
         )
     }
 }

@@ -368,6 +368,9 @@ class MusicUploader {
         let existingKeys = Set(preview.skippedFiles.map { $0.s3Key })
         await storageService.setExistingKeysCache(existingKeys)
 
+        // Fetch existing catalog to preserve addedAt dates for existing tracks
+        let existingAddedAtMap = await fetchExistingAddedAtMap(config: config)
+
         try Task.checkCancellation()
 
         // Phase: Process files
@@ -398,7 +401,8 @@ class MusicUploader {
                         storageService: storageService,
                         metadataExtractor: metadataExtractor,
                         artworkExtractor: artworkExtractor,
-                        audioConverter: audioConverter
+                        audioConverter: audioConverter,
+                        existingAddedAtMap: existingAddedAtMap
                     )
                 }
                 submitted += 1
@@ -429,6 +433,9 @@ class MusicUploader {
             let metadata = await metadataExtractor.extract(from: item.fileURL)
             let url = await storageService.getPublicURL(for: item.s3Key)
 
+            // Preserve existing addedAt or use current date as fallback
+            let addedAt = existingAddedAtMap[item.s3Key] ?? Date()
+
             let track = ProcessedTrack(
                 title: item.title,
                 artist: metadata.artist ?? item.artist,
@@ -444,7 +451,8 @@ class MusicUploader {
                 format: item.format,
                 s3Key: item.s3Key,
                 url: url,
-                originalFormat: item.needsConversion ? item.fileURL.pathExtension.lowercased() : nil
+                originalFormat: item.needsConversion ? item.fileURL.pathExtension.lowercased() : nil,
+                addedAt: addedAt
             )
             processedTracks.append(track)
         }
@@ -469,7 +477,8 @@ class MusicUploader {
         storageService: StorageService,
         metadataExtractor: MetadataExtractor,
         artworkExtractor: ArtworkExtractor,
-        audioConverter: AudioConverter
+        audioConverter: AudioConverter,
+        existingAddedAtMap: [String: Date]
     ) async -> ProcessedTrack? {
         let fileURL = previewItem.fileURL
         let s3Key = previewItem.s3Key
@@ -528,6 +537,9 @@ class MusicUploader {
                 progress.processedFiles += 1
             }
 
+            // New uploads get current date, existing tracks preserve their addedAt
+            let addedAt = existingAddedAtMap[s3Key] ?? Date()
+
             return ProcessedTrack(
                 title: previewItem.title,
                 artist: metadata.artist ?? previewItem.artist,
@@ -544,7 +556,8 @@ class MusicUploader {
                 s3Key: s3Key,
                 url: url,
                 embeddedArtworkUrl: embeddedArtworkUrl,
-                originalFormat: wasConverted ? fileURL.pathExtension.lowercased() : nil
+                originalFormat: wasConverted ? fileURL.pathExtension.lowercased() : nil,
+                addedAt: addedAt
             )
         } catch {
             // Clean up converted file on failure
@@ -824,6 +837,49 @@ class MusicUploader {
         }
     }
 
+    // MARK: - Fetch Existing AddedAt Map
+
+    /// Fetches the existing catalog.json from CDN and builds a lookup map of s3Key -> addedAt
+    /// Used to preserve addedAt dates for existing tracks during catalog rebuild
+    private func fetchExistingAddedAtMap(config: UploadConfiguration) async -> [String: Date] {
+        let base = config.cdnBaseURL.replacingOccurrences(of: "/\(config.spacesPrefix)", with: "")
+        let prefix = config.spacesPrefix
+        guard let url = URL(string: "\(base)/\(prefix)/catalog.json") else {
+            return [:]
+        }
+
+        do {
+            let (data, response) = try await URLSession.shared.data(from: url)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200 else {
+                print("📋 No existing catalog found on CDN (new catalog will be created)")
+                return [:]
+            }
+
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let catalog = try decoder.decode(MusicCatalog.self, from: data)
+
+            // Build lookup map of s3Key -> addedAt
+            var addedAtMap: [String: Date] = [:]
+            for artist in catalog.artists {
+                for album in artist.albums {
+                    for track in album.tracks {
+                        if let addedAt = track.addedAt {
+                            addedAtMap[track.s3Key] = addedAt
+                        }
+                    }
+                }
+            }
+
+            print("📋 Found \(addedAtMap.count) existing tracks with addedAt dates")
+            return addedAtMap
+        } catch {
+            print("⚠️ Could not fetch existing catalog: \(error.localizedDescription)")
+            return [:]
+        }
+    }
+
     // MARK: - Save Catalog to SwiftData and CDN
 
     private func saveCatalog(artists: [CatalogArtist], totalTracks: Int, storageService: StorageService, config: UploadConfiguration) async throws {
@@ -858,6 +914,7 @@ class MusicUploader {
 
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
         let catalogData = try encoder.encode(catalog)
 
         _ = try await storageService.forceUploadData(
