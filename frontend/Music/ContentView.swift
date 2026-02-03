@@ -89,10 +89,11 @@ struct ContentView: View {
     var body: some View {
         Group {
             #if os(iOS)
-            if musicService.isLoading {
-                ProgressView("Loading catalog...")
+            if musicService.isLoading || musicService.loadingStage == .failed {
+                CatalogLoadingView(musicService: musicService)
             } else if musicService.isEmpty {
                 emptyStateView
+                    .transition(.opacity)
             } else {
                 TabView(selection: $selectedTab) {
                     HomeView(
@@ -178,8 +179,8 @@ struct ContentView: View {
                     }
                 }
             } detail: {
-                if musicService.isLoading {
-                    ProgressView("Loading catalog...")
+                if musicService.isLoading || musicService.loadingStage == .failed {
+                    CatalogLoadingView(musicService: musicService)
                 } else {
                     switch selectedTab {
                     case .artists:
@@ -233,16 +234,15 @@ struct ContentView: View {
             }
             #endif
         }
+        .animation(.easeInOut(duration: 0.3), value: musicService.isLoading)
+        .animation(.easeInOut(duration: 0.3), value: musicService.loadingStage)
         .task {
-            // Sync iCloud settings (CDN prefix from macOS)
-            MusicService.syncCloudSettings()
-
             if cacheService == nil {
                 cacheService = CacheService(modelContext: modelContext)
                 playerService.cacheService = cacheService
             }
             musicService.configure(modelContext: modelContext)
-            await musicService.loadCatalog()
+            await musicService.loadCatalogWithRetry()
             // Restore playback state after catalog loads
             if musicService.catalog != nil {
                 playerService.restorePlaybackState(from: musicService)
@@ -256,17 +256,6 @@ struct ContentView: View {
             } else if newPhase == .background {
                 playerService.savePlaybackState()
             }
-        }
-        .alert("Unable to Load Music", isPresented: .constant(musicService.error != nil)) {
-            Button("Retry") {
-                musicService.error = nil
-                Task { await musicService.loadCatalog() }
-            }
-            Button("OK", role: .cancel) {
-                musicService.error = nil
-            }
-        } message: {
-            Text(musicService.error?.localizedDescription ?? "An unknown error occurred")
         }
     }
 }

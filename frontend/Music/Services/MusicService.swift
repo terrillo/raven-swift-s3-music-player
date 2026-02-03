@@ -11,8 +11,20 @@ import SwiftData
 @MainActor
 @Observable
 class MusicService {
+    enum LoadingStage: String {
+        case idle = "Idle"
+        case syncingCloudSettings = "Syncing settings..."
+        case checkingLocalCache = "Checking local cache..."
+        case fetchingFromCDN = "Fetching catalog..."
+        case complete = "Complete"
+        case failed = "Failed"
+    }
+
     private(set) var catalog: MusicCatalog?
     private(set) var isLoading = false
+    private(set) var loadingStage: LoadingStage = .idle
+    private(set) var retryCount: Int = 0
+    let maxRetries: Int = 3
     var error: Error?
     private(set) var lastUpdated: Date?
 
@@ -167,6 +179,41 @@ class MusicService {
         await loadCatalogTask?.value
     }
 
+    /// Load catalog with automatic retry on failure (up to maxRetries with exponential backoff)
+    func loadCatalogWithRetry(forceRefresh: Bool = false) async {
+        retryCount = 0
+        error = nil
+
+        while retryCount <= maxRetries {
+            await loadCatalog(forceRefresh: forceRefresh)
+
+            // Success: catalog loaded or legitimately empty (no error)
+            if error == nil {
+                loadingStage = .complete
+                return
+            }
+
+            retryCount += 1
+
+            // If we've exhausted retries, mark as failed
+            if retryCount > maxRetries {
+                loadingStage = .failed
+                return
+            }
+
+            // Exponential backoff: 1s, 2s, 4s
+            let delay = pow(2.0, Double(retryCount - 1))
+            try? await Task.sleep(for: .seconds(delay))
+        }
+    }
+
+    /// Clear error state for manual retry
+    func resetError() {
+        error = nil
+        loadingStage = .idle
+        retryCount = 0
+    }
+
     private func performLoadCatalog(forceRefresh: Bool) async {
         guard !isLoading else { return }
 
@@ -175,6 +222,7 @@ class MusicService {
         invalidateCaches()
 
         // Sync iCloud settings first (get latest CDN prefix from macOS)
+        loadingStage = .syncingCloudSettings
         Self.syncCloudSettings()
 
         // Clear cache if force refreshing
@@ -183,13 +231,16 @@ class MusicService {
         }
 
         // Try loading from SwiftData first
+        loadingStage = .checkingLocalCache
         await loadFromSwiftData()
 
         // If local is empty, fetch from CDN
         if catalog?.artists.isEmpty ?? true {
+            loadingStage = .fetchingFromCDN
             await fetchFromCDN()
         }
 
+        loadingStage = error == nil ? .complete : .failed
         isLoading = false
     }
 
