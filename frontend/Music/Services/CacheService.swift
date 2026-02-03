@@ -55,17 +55,57 @@ class CacheService {
         loadCachedKeys()
     }
 
-    /// Load all cached keys into memory for O(1) lookups
+    /// Load all cached keys into memory for O(1) lookups, validating files exist on disk
     func loadCachedKeys() {
-        // Load cached track s3Keys
+        // Load and validate cached tracks
         let trackDescriptor = FetchDescriptor<CachedTrack>()
         let tracks = (try? modelContext.fetch(trackDescriptor)) ?? []
-        cachedTrackKeys = Set(tracks.map { $0.s3Key })
+        var validTrackKeys: Set<String> = []
+        var staleTrackRecords: [CachedTrack] = []
 
-        // Load cached artwork URLs
+        for track in tracks {
+            let localURL = tracksDirectory.appendingPathComponent(track.localFileName)
+            if FileManager.default.fileExists(atPath: localURL.path) {
+                validTrackKeys.insert(track.s3Key)
+            } else {
+                staleTrackRecords.append(track)
+            }
+        }
+        cachedTrackKeys = validTrackKeys
+
+        // Load and validate cached artwork
         let artworkDescriptor = FetchDescriptor<CachedArtwork>()
         let artwork = (try? modelContext.fetch(artworkDescriptor)) ?? []
-        cachedArtworkUrls = Set(artwork.map { $0.remoteUrl })
+        var validArtworkUrls: Set<String> = []
+        var staleArtworkRecords: [CachedArtwork] = []
+
+        for art in artwork {
+            let localURL = artworkDirectory.appendingPathComponent(art.localFileName)
+            if FileManager.default.fileExists(atPath: localURL.path) {
+                validArtworkUrls.insert(art.remoteUrl)
+            } else {
+                staleArtworkRecords.append(art)
+            }
+        }
+        cachedArtworkUrls = validArtworkUrls
+
+        // Clean up stale records in batch
+        if !staleTrackRecords.isEmpty || !staleArtworkRecords.isEmpty {
+            for record in staleTrackRecords {
+                modelContext.delete(record)
+            }
+            for record in staleArtworkRecords {
+                modelContext.delete(record)
+            }
+            try? modelContext.save()
+
+            if !staleTrackRecords.isEmpty {
+                print("CacheService: Cleaned up \(staleTrackRecords.count) stale track records")
+            }
+            if !staleArtworkRecords.isEmpty {
+                print("CacheService: Cleaned up \(staleArtworkRecords.count) stale artwork records")
+            }
+        }
     }
 
     // MARK: - Directory Management
@@ -151,7 +191,13 @@ class CacheService {
         guard let cached = results.first else { return nil }
 
         let localURL = artworkDirectory.appendingPathComponent(cached.localFileName)
-        guard FileManager.default.fileExists(atPath: localURL.path) else { return nil }
+        guard FileManager.default.fileExists(atPath: localURL.path) else {
+            // File was deleted (e.g., by iOS storage pressure) - clean up stale record
+            modelContext.delete(cached)
+            try? modelContext.save()
+            cachedArtworkUrls.remove(urlString)
+            return nil
+        }
         return localURL
     }
 
@@ -459,9 +505,14 @@ class CacheService {
 
             let fileExtension = url.pathExtension.isEmpty ? track.format : url.pathExtension
             let fileName = "\(sha256Hash(track.s3Key)).\(fileExtension)"
-            let localURL = tracksDirectory.appendingPathComponent(fileName)
+            var localURL = tracksDirectory.appendingPathComponent(fileName)
 
             try data.write(to: localURL)
+
+            // Exclude from iCloud/iTunes backup to prevent iOS storage pressure cleanup
+            var resourceValues = URLResourceValues()
+            resourceValues.isExcludedFromBackup = true
+            try localURL.setResourceValues(resourceValues)
 
             let cachedTrack = CachedTrack(
                 s3Key: track.s3Key,
@@ -497,13 +548,19 @@ class CacheService {
 
             let fileExtension = url.pathExtension.isEmpty ? "jpg" : url.pathExtension
             let fileName = "\(sha256Hash(urlString)).\(fileExtension)"
-            let localURL = artworkDirectory.appendingPathComponent(fileName)
+            var localURL = artworkDirectory.appendingPathComponent(fileName)
 
             try data.write(to: localURL)
 
+            // Exclude from iCloud/iTunes backup to prevent iOS storage pressure cleanup
+            var resourceValues = URLResourceValues()
+            resourceValues.isExcludedFromBackup = true
+            try localURL.setResourceValues(resourceValues)
+
             let cachedArtwork = CachedArtwork(
                 remoteUrl: urlString,
-                localFileName: fileName
+                localFileName: fileName,
+                fileSize: Int64(data.count)
             )
             modelContext.insert(cachedArtwork)
             try modelContext.save()
@@ -562,14 +619,22 @@ class CacheService {
 
             let fileExtension = url.pathExtension.isEmpty ? "jpg" : url.pathExtension
             let fileName = "\(sha256Hash(urlString)).\(fileExtension)"
-            let localURL = artworkDirectory.appendingPathComponent(fileName)
+            var localURL = artworkDirectory.appendingPathComponent(fileName)
 
             try data.write(to: localURL)
+
+            // Exclude from iCloud/iTunes backup to prevent iOS storage pressure cleanup
+            var resourceValues = URLResourceValues()
+            resourceValues.isExcludedFromBackup = true
+            try localURL.setResourceValues(resourceValues)
+
+            let fileSize = Int64(data.count)
 
             await MainActor.run {
                 let cachedArtwork = CachedArtwork(
                     remoteUrl: urlString,
-                    localFileName: fileName
+                    localFileName: fileName,
+                    fileSize: fileSize
                 )
                 modelContext.insert(cachedArtwork)
                 try? modelContext.save()

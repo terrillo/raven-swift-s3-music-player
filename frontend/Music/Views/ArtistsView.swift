@@ -99,7 +99,11 @@ struct ArtworkImage: View {
         }
 
         guard let loadURL = urlToLoad else {
-            await MainActor.run { loadedImage = nil }
+            await MainActor.run {
+                loadedImage = nil
+                // Reset download trigger so we can retry downloading missing files
+                hasTriggeredDownload = false
+            }
             return
         }
 
@@ -117,6 +121,10 @@ struct ArtworkImage: View {
         await MainActor.run {
             loadedImage = image
             isLoading = false
+            // If file exists but couldn't load (corrupted), allow re-download
+            if image == nil {
+                hasTriggeredDownload = false
+            }
         }
     }
 

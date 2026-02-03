@@ -27,11 +27,13 @@ class CachedTrack {
 class CachedArtwork {
     @Attribute(.unique) var remoteUrl: String
     var localFileName: String
+    var fileSize: Int64
     var cachedAt: Date
 
-    init(remoteUrl: String, localFileName: String, cachedAt: Date = Date()) {
+    init(remoteUrl: String, localFileName: String, fileSize: Int64 = 0, cachedAt: Date = Date()) {
         self.remoteUrl = remoteUrl
         self.localFileName = localFileName
+        self.fileSize = fileSize
         self.cachedAt = cachedAt
     }
 }
