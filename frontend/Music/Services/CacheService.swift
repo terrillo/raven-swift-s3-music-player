@@ -50,21 +50,79 @@ class CacheService {
     /// Max cache size in bytes
     var maxCacheSizeBytes: Int64 { Int64(maxCacheSizeGB) * 1_000_000_000 }
 
+    /// Whether artwork should be included in backups (persisted to survive restore)
+    var shouldPersistArtwork: Bool { UserDefaults.standard.bool(forKey: "autoImageCachingEnabled") }
+
+    /// Whether tracks should be included in backups (only when no storage limit)
+    var shouldPersistTracks: Bool { !hasStorageLimit }
+
     init(modelContext: ModelContext) {
         self.modelContext = modelContext
+        UserDefaults.standard.register(defaults: ["autoImageCachingEnabled": true, "maxCacheSizeGB": 0])
+        #if os(macOS)
+        migrateFromOldCacheLocation()
+        #endif
         loadCachedKeys()
     }
 
+    #if os(macOS)
+    /// Migrate cache from old Documents location to new Application Support location
+    private func migrateFromOldCacheLocation() {
+        guard let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+        let oldCacheDir = documentsPath.appendingPathComponent("MusicCache", isDirectory: true)
+
+        // Check if old cache exists
+        guard FileManager.default.fileExists(atPath: oldCacheDir.path) else { return }
+
+        // Check if new cache doesn't exist yet (avoid re-migrating)
+        let newCacheDir = cacheDirectory
+        if FileManager.default.fileExists(atPath: newCacheDir.path) {
+            // New location already exists, just delete old one
+            print("CacheService: Removing old cache location at \(oldCacheDir.path)")
+            try? FileManager.default.removeItem(at: oldCacheDir)
+            return
+        }
+
+        print("CacheService: Migrating cache from \(oldCacheDir.path) to \(newCacheDir.path)")
+
+        do {
+            // Ensure parent directory exists
+            try FileManager.default.createDirectory(at: newCacheDir.deletingLastPathComponent(), withIntermediateDirectories: true)
+            // Move the cache directory
+            try FileManager.default.moveItem(at: oldCacheDir, to: newCacheDir)
+            print("CacheService: Successfully migrated cache to Application Support")
+        } catch {
+            print("CacheService: Migration failed: \(error). Will re-download cache.")
+            // If migration fails, just delete the old location
+            try? FileManager.default.removeItem(at: oldCacheDir)
+        }
+    }
+    #endif
+
     /// Load all cached keys into memory for O(1) lookups, validating files exist on disk
     func loadCachedKeys() {
+        // Log cache directory for debugging
+        let cacheDir = cacheDirectory
+        let tracksDir = tracksDirectory
+        let artworkDir = artworkDirectory
+        print("CacheService: Cache directory: \(cacheDir.path)")
+        print("CacheService: Tracks directory exists: \(FileManager.default.fileExists(atPath: tracksDir.path))")
+        print("CacheService: Artwork directory exists: \(FileManager.default.fileExists(atPath: artworkDir.path))")
+
+        // Ensure directories exist before validation
+        try? FileManager.default.createDirectory(at: tracksDir, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: artworkDir, withIntermediateDirectories: true)
+
         // Load and validate cached tracks
         let trackDescriptor = FetchDescriptor<CachedTrack>()
         let tracks = (try? modelContext.fetch(trackDescriptor)) ?? []
         var validTrackKeys: Set<String> = []
         var staleTrackRecords: [CachedTrack] = []
 
+        print("CacheService: Found \(tracks.count) track records in database")
+
         for track in tracks {
-            let localURL = tracksDirectory.appendingPathComponent(track.localFileName)
+            let localURL = tracksDir.appendingPathComponent(track.localFileName)
             if FileManager.default.fileExists(atPath: localURL.path) {
                 validTrackKeys.insert(track.s3Key)
             } else {
@@ -79,8 +137,10 @@ class CacheService {
         var validArtworkUrls: Set<String> = []
         var staleArtworkRecords: [CachedArtwork] = []
 
+        print("CacheService: Found \(artwork.count) artwork records in database")
+
         for art in artwork {
-            let localURL = artworkDirectory.appendingPathComponent(art.localFileName)
+            let localURL = artworkDir.appendingPathComponent(art.localFileName)
             if FileManager.default.fileExists(atPath: localURL.path) {
                 validArtworkUrls.insert(art.remoteUrl)
             } else {
@@ -100,21 +160,38 @@ class CacheService {
             try? modelContext.save()
 
             if !staleTrackRecords.isEmpty {
-                print("CacheService: Cleaned up \(staleTrackRecords.count) stale track records")
+                print("CacheService: Cleaned up \(staleTrackRecords.count) stale track records (files missing from disk)")
             }
             if !staleArtworkRecords.isEmpty {
-                print("CacheService: Cleaned up \(staleArtworkRecords.count) stale artwork records")
+                print("CacheService: Cleaned up \(staleArtworkRecords.count) stale artwork records (files missing from disk)")
             }
         }
+
+        print("CacheService: Valid cached tracks: \(validTrackKeys.count), Valid cached artwork: \(validArtworkUrls.count)")
+
+        // Ensure backup exclusion flags match current settings
+        updateTrackBackupExclusion()
+        updateArtworkBackupExclusion()
     }
 
     // MARK: - Directory Management
 
     private var cacheDirectory: URL {
+        // Use Application Support on macOS (not synced by iCloud, appropriate for cache)
+        // Use Documents on iOS (more user-accessible for Files app)
+        #if os(macOS)
+        guard let appSupportPath = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            return URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("MusicCache")
+        }
+        // Use bundle identifier subdirectory for proper organization
+        let bundleId = Bundle.main.bundleIdentifier ?? "com.terrillo.Music"
+        return appSupportPath.appendingPathComponent(bundleId, isDirectory: true).appendingPathComponent("MusicCache", isDirectory: true)
+        #else
         guard let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
             return URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("MusicCache")
         }
         return documentsPath.appendingPathComponent("MusicCache", isDirectory: true)
+        #endif
     }
 
     private var tracksDirectory: URL {
@@ -148,6 +225,28 @@ class CacheService {
     func isArtworkCached(_ urlString: String) -> Bool {
         // Fast O(1) lookup using in-memory cache
         return cachedArtworkUrls.contains(urlString)
+    }
+
+    /// Fast artwork URL lookup that skips database query by computing path directly
+    /// Uses in-memory cache check + deterministic filename computation
+    func localArtworkURLFast(for urlString: String) -> URL? {
+        // Fast check: is it in our in-memory cache?
+        guard cachedArtworkUrls.contains(urlString) else { return nil }
+
+        // Compute the filename directly (same logic as download)
+        guard let url = URL(string: urlString) else { return nil }
+        let fileExtension = url.pathExtension.isEmpty ? "jpg" : url.pathExtension
+        let fileName = "\(sha256Hash(urlString)).\(fileExtension)"
+        let localURL = artworkDirectory.appendingPathComponent(fileName)
+
+        // Verify file actually exists (handles edge cases)
+        guard FileManager.default.fileExists(atPath: localURL.path) else {
+            // File missing - clean up stale in-memory entry
+            cachedArtworkUrls.remove(urlString)
+            return nil
+        }
+
+        return localURL
     }
 
     /// Observable-friendly method for checking if a track is playable.
@@ -509,9 +608,9 @@ class CacheService {
 
             try data.write(to: localURL)
 
-            // Exclude from iCloud/iTunes backup to prevent iOS storage pressure cleanup
+            // Exclude from backup unless user wants unlimited (forever) cache
             var resourceValues = URLResourceValues()
-            resourceValues.isExcludedFromBackup = true
+            resourceValues.isExcludedFromBackup = !shouldPersistTracks
             try localURL.setResourceValues(resourceValues)
 
             let cachedTrack = CachedTrack(
@@ -552,9 +651,9 @@ class CacheService {
 
             try data.write(to: localURL)
 
-            // Exclude from iCloud/iTunes backup to prevent iOS storage pressure cleanup
+            // Exclude from backup unless auto-caching is on (persist artwork forever)
             var resourceValues = URLResourceValues()
-            resourceValues.isExcludedFromBackup = true
+            resourceValues.isExcludedFromBackup = !shouldPersistArtwork
             try localURL.setResourceValues(resourceValues)
 
             let cachedArtwork = CachedArtwork(
@@ -623,9 +722,9 @@ class CacheService {
 
             try data.write(to: localURL)
 
-            // Exclude from iCloud/iTunes backup to prevent iOS storage pressure cleanup
+            // Exclude from backup unless auto-caching is on (persist artwork forever)
             var resourceValues = URLResourceValues()
-            resourceValues.isExcludedFromBackup = true
+            resourceValues.isExcludedFromBackup = !shouldPersistArtwork
             try localURL.setResourceValues(resourceValues)
 
             let fileSize = Int64(data.count)
@@ -680,6 +779,38 @@ class CacheService {
             task.cancel()
         }
         activeDownloadTasks.removeAll()
+    }
+
+    // MARK: - Backup Exclusion Updates
+
+    /// Update isExcludedFromBackup on all cached track files based on current storage limit setting
+    func updateTrackBackupExclusion() {
+        let exclude = !shouldPersistTracks
+        let descriptor = FetchDescriptor<CachedTrack>()
+        guard let tracks = try? modelContext.fetch(descriptor) else { return }
+
+        for track in tracks {
+            var localURL = tracksDirectory.appendingPathComponent(track.localFileName)
+            guard FileManager.default.fileExists(atPath: localURL.path) else { continue }
+            var resourceValues = URLResourceValues()
+            resourceValues.isExcludedFromBackup = exclude
+            try? localURL.setResourceValues(resourceValues)
+        }
+    }
+
+    /// Update isExcludedFromBackup on all cached artwork files based on current auto-caching setting
+    func updateArtworkBackupExclusion() {
+        let exclude = !shouldPersistArtwork
+        let descriptor = FetchDescriptor<CachedArtwork>()
+        guard let artwork = try? modelContext.fetch(descriptor) else { return }
+
+        for art in artwork {
+            var localURL = artworkDirectory.appendingPathComponent(art.localFileName)
+            guard FileManager.default.fileExists(atPath: localURL.path) else { continue }
+            var resourceValues = URLResourceValues()
+            resourceValues.isExcludedFromBackup = exclude
+            try? localURL.setResourceValues(resourceValues)
+        }
     }
 
     // MARK: - Clear Cache

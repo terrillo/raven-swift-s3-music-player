@@ -10,9 +10,46 @@ struct PlaylistView: View {
     var playerService: PlayerService
     var cacheService: CacheService?
 
+    @State private var showingCreatePlaylist = false
+
+    private var recentPlaylists: [PlaylistEntity] {
+        Array(PlaylistStore.shared.playlists.prefix(3))
+    }
+
     var body: some View {
         NavigationStack {
             List {
+                Section("My Playlists") {
+                    ForEach(recentPlaylists, id: \.id) { playlist in
+                        NavigationLink {
+                            PlaylistDetailView(
+                                playlist: playlist,
+                                musicService: musicService,
+                                playerService: playerService,
+                                cacheService: cacheService
+                            )
+                        } label: {
+                            PlaylistRowView(playlist: playlist, cacheService: cacheService)
+                        }
+                    }
+
+                    NavigationLink {
+                        ManualPlaylistsListView(
+                            musicService: musicService,
+                            playerService: playerService,
+                            cacheService: cacheService
+                        )
+                    } label: {
+                        Label("All Playlists", systemImage: "music.note.list")
+                    }
+
+                    Button {
+                        showingCreatePlaylist = true
+                    } label: {
+                        Label("New Playlist", systemImage: "plus")
+                    }
+                }
+
                 Section("Favorites") {
                     NavigationLink {
                         FavoriteArtistsView(
@@ -88,6 +125,9 @@ struct PlaylistView: View {
                         Image(systemName: "magnifyingglass")
                     }
                 }
+            }
+            .sheet(isPresented: $showingCreatePlaylist) {
+                CreatePlaylistSheet()
             }
         }
     }

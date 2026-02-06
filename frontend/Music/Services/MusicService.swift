@@ -234,8 +234,8 @@ class MusicService {
         loadingStage = .checkingLocalCache
         await loadFromSwiftData()
 
-        // If local is empty, fetch from CDN
-        if catalog?.artists.isEmpty ?? true {
+        // Only fetch from CDN when explicitly requested (via Settings "Sync Catalog")
+        if forceRefresh && (catalog?.artists.isEmpty ?? true) {
             loadingStage = .fetchingFromCDN
             await fetchFromCDN()
         }

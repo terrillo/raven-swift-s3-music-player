@@ -280,11 +280,27 @@ Example:
 
 ## Cache Storage
 
-Location: `~/Documents/MusicCache/`
+Location: `~/Documents/MusicCache/` (iOS) or `~/Library/Application Support/{bundleId}/MusicCache/` (macOS)
 - `tracks/` - Downloaded audio files (SHA256 hashed filenames)
 - `artwork/` - Downloaded artwork (SHA256 hashed filenames)
 
 Tracked via SwiftData (`CachedTrack`, `CachedArtwork` models).
+
+### Forever Cache (Backup Persistence)
+
+Cached files use dynamic `isExcludedFromBackup` based on user settings:
+
+| Setting | Value | Backup Behavior |
+|---------|-------|----------------|
+| `maxCacheSizeGB` | `0` (unlimited) | Tracks: included in backups (forever cache) |
+| `maxCacheSizeGB` | `> 0` (limited) | Tracks: excluded from backups (purgeable) |
+| `autoImageCachingEnabled` | `true` | Artwork: included in backups (forever cache) |
+| `autoImageCachingEnabled` | `false` | Artwork: excluded from backups + cache cleared |
+
+- `CacheService.shouldPersistTracks` / `shouldPersistArtwork` compute the backup flag
+- `updateTrackBackupExclusion()` / `updateArtworkBackupExclusion()` bulk-update existing files
+- Both are called in `loadCachedKeys()` on every app launch for consistency
+- `SettingsView` has `.onChange` handlers that trigger updates (or clear artwork cache) when settings change
 
 ## CDN URL
 

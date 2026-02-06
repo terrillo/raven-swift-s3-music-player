@@ -69,7 +69,7 @@ struct CatalogLoadingView: View {
                     Button {
                         Task {
                             musicService.resetError()
-                            await musicService.loadCatalogWithRetry()
+                            await musicService.loadCatalogWithRetry(forceRefresh: true)
                         }
                     } label: {
                         Label("Try Again", systemImage: "arrow.clockwise")

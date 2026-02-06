@@ -21,6 +21,7 @@ class FavoritesStore {
     private init() {
         loadFavorites()
         observeChanges()
+        observeRemoteChanges()
     }
 
     // MARK: - Artist Favorites
@@ -200,5 +201,20 @@ class FavoritesStore {
                 self?.loadFavorites()
             }
             .store(in: &cancellables)
+    }
+
+    private func observeRemoteChanges() {
+        // Observe CloudKit remote changes
+        NotificationCenter.default.publisher(for: .NSPersistentStoreRemoteChange, object: AnalyticsStore.shared.container.persistentStoreCoordinator)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.loadFavorites()
+            }
+            .store(in: &cancellables)
+    }
+
+    /// Force refresh favorites from Core Data
+    func refresh() {
+        loadFavorites()
     }
 }

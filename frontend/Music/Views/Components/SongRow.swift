@@ -48,6 +48,9 @@ struct SongRow: View {
     // Navigation callback for context menu
     var onNavigate: ((NavigationDestination) -> Void)? = nil
 
+    // Callback for creating a new playlist with this track
+    var onCreatePlaylist: ((Track) -> Void)? = nil
+
     // MARK: - Computed Properties
 
     private var isCurrentTrack: Bool {
@@ -150,6 +153,31 @@ struct SongRow: View {
                 isFavorite ? "Remove from Favorites" : "Add to Favorites",
                 systemImage: isFavorite ? "heart.slash" : "heart"
             )
+        }
+
+        Divider()
+
+        // Add to Playlist menu
+        Menu {
+            ForEach(PlaylistStore.shared.playlists, id: \.id) { playlist in
+                Button {
+                    PlaylistStore.shared.addTrack(track, to: playlist)
+                } label: {
+                    Label(playlist.name ?? "Untitled", systemImage: "music.note.list")
+                }
+            }
+
+            if !PlaylistStore.shared.playlists.isEmpty {
+                Divider()
+            }
+
+            Button {
+                onCreatePlaylist?(track)
+            } label: {
+                Label("New Playlist...", systemImage: "plus")
+            }
+        } label: {
+            Label("Add to Playlist", systemImage: "text.badge.plus")
         }
     }
 
@@ -339,7 +367,8 @@ extension SongRow {
         isPlayable: Bool = true,
         albumImageUrl: String? = nil,
         artistImageUrl: String? = nil,
-        onNavigate: ((NavigationDestination) -> Void)? = nil
+        onNavigate: ((NavigationDestination) -> Void)? = nil,
+        onCreatePlaylist: ((Track) -> Void)? = nil
     ) -> SongRow {
         SongRow(
             track: track,
@@ -353,7 +382,8 @@ extension SongRow {
             isPlayable: isPlayable,
             albumImageUrl: albumImageUrl,
             artistImageUrl: artistImageUrl,
-            onNavigate: onNavigate
+            onNavigate: onNavigate,
+            onCreatePlaylist: onCreatePlaylist
         )
     }
 
@@ -363,7 +393,8 @@ extension SongRow {
         playerService: PlayerService,
         musicService: MusicService? = nil,
         isPlayable: Bool = true,
-        onNavigate: ((NavigationDestination) -> Void)? = nil
+        onNavigate: ((NavigationDestination) -> Void)? = nil,
+        onCreatePlaylist: ((Track) -> Void)? = nil
     ) -> SongRow {
         SongRow(
             track: track,
@@ -375,7 +406,8 @@ extension SongRow {
             cacheService: nil,
             musicService: musicService,
             isPlayable: isPlayable,
-            onNavigate: onNavigate
+            onNavigate: onNavigate,
+            onCreatePlaylist: onCreatePlaylist
         )
     }
 
@@ -386,7 +418,8 @@ extension SongRow {
         cacheService: CacheService?,
         musicService: MusicService? = nil,
         isPlayable: Bool = true,
-        onNavigate: ((NavigationDestination) -> Void)? = nil
+        onNavigate: ((NavigationDestination) -> Void)? = nil,
+        onCreatePlaylist: ((Track) -> Void)? = nil
     ) -> SongRow {
         SongRow(
             track: track,
@@ -398,7 +431,8 @@ extension SongRow {
             cacheService: cacheService,
             musicService: musicService,
             isPlayable: isPlayable,
-            onNavigate: onNavigate
+            onNavigate: onNavigate,
+            onCreatePlaylist: onCreatePlaylist
         )
     }
 
@@ -411,7 +445,8 @@ extension SongRow {
         cacheService: CacheService?,
         musicService: MusicService? = nil,
         isPlayable: Bool = true,
-        onNavigate: ((NavigationDestination) -> Void)? = nil
+        onNavigate: ((NavigationDestination) -> Void)? = nil,
+        onCreatePlaylist: ((Track) -> Void)? = nil
     ) -> SongRow {
         SongRow(
             track: track,
@@ -423,7 +458,8 @@ extension SongRow {
             cacheService: cacheService,
             musicService: musicService,
             isPlayable: isPlayable,
-            onNavigate: onNavigate
+            onNavigate: onNavigate,
+            onCreatePlaylist: onCreatePlaylist
         )
     }
 

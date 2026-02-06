@@ -16,6 +16,43 @@ typealias PlatformImage = UIImage
 typealias PlatformImage = NSImage
 #endif
 
+/// In-memory LRU cache for loaded artwork images to avoid repeated disk reads
+final class ImageCache {
+    static let shared = ImageCache()
+
+    private let cache = NSCache<NSString, PlatformImage>()
+    private let queue = DispatchQueue(label: "com.terrillo.Music.ImageCache", attributes: .concurrent)
+
+    private init() {
+        // Limit cache to ~100MB on iOS, ~200MB on macOS
+        #if os(iOS)
+        cache.totalCostLimit = 100 * 1024 * 1024
+        cache.countLimit = 200
+        #else
+        cache.totalCostLimit = 200 * 1024 * 1024
+        cache.countLimit = 500
+        #endif
+    }
+
+    func image(forKey key: String) -> PlatformImage? {
+        cache.object(forKey: key as NSString)
+    }
+
+    func setImage(_ image: PlatformImage, forKey key: String) {
+        // Estimate memory cost based on image dimensions
+        #if os(iOS)
+        let cost = Int(image.size.width * image.size.height * image.scale * image.scale * 4)
+        #else
+        let cost = Int(image.size.width * image.size.height * 4)
+        #endif
+        cache.setObject(image, forKey: key as NSString, cost: cost)
+    }
+
+    func removeImage(forKey key: String) {
+        cache.removeObject(forKey: key as NSString)
+    }
+}
+
 struct ArtworkImage: View {
     let url: String?
     let size: CGFloat
@@ -85,13 +122,26 @@ struct ArtworkImage: View {
     }
 
     private func loadImageAsync() async {
-        // Compute effective URL fresh (prefer localURL, then check cache)
+        guard let urlString = url else {
+            await MainActor.run { loadedImage = nil }
+            return
+        }
+
+        // Fast path: check in-memory image cache first
+        if let cachedImage = ImageCache.shared.image(forKey: urlString) {
+            await MainActor.run {
+                loadedImage = cachedImage
+                isLoading = false
+            }
+            return
+        }
+
+        // Compute effective URL fresh (prefer localURL, then check cache with fast lookup)
         let urlToLoad: URL?
         if let local = localURL {
             urlToLoad = local
-        } else if let urlString = url,
-                  let cacheService = cacheService,
-                  let cached = cacheService.localArtworkURL(for: urlString) {
+        } else if let cacheService = cacheService,
+                  let cached = cacheService.localArtworkURLFast(for: urlString) {
             await MainActor.run { cachedLocalURL = cached }
             urlToLoad = cached
         } else {
@@ -119,6 +169,10 @@ struct ArtworkImage: View {
         }.value
 
         await MainActor.run {
+            if let image = image {
+                // Cache in memory for fast subsequent access
+                ImageCache.shared.setImage(image, forKey: urlString)
+            }
             loadedImage = image
             isLoading = false
             // If file exists but couldn't load (corrupted), allow re-download
@@ -153,9 +207,24 @@ struct ArtworkImage: View {
         hasTriggeredDownload = true
 
         cacheService.cacheArtworkIfNeeded(urlString) { localURL in
-            DispatchQueue.main.async {
-                if let localURL = localURL {
+            guard let localURL = localURL else { return }
+
+            // Load image immediately on background thread, then update UI
+            Task.detached(priority: .userInitiated) {
+                guard let data = try? Data(contentsOf: localURL) else { return }
+                #if os(iOS)
+                guard let image = UIImage(data: data) else { return }
+                #else
+                guard let image = NSImage(data: data) else { return }
+                #endif
+
+                // Cache in memory
+                ImageCache.shared.setImage(image, forKey: urlString)
+
+                await MainActor.run {
                     cachedLocalURL = localURL
+                    loadedImage = image
+                    isLoading = false
                 }
             }
         }

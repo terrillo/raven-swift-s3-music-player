@@ -24,6 +24,8 @@ struct NowPlayingSheet: View {
 
     @State private var artworkColor: Color = Color(white: 0.3)
     @State private var selectedSegment: QueueSegment = .playing
+    @State private var showingCreatePlaylist = false
+    @State private var trackForNewPlaylist: Track?
 
     // Available segments based on shuffle state
     private var availableSegments: [QueueSegment] {
@@ -181,6 +183,11 @@ struct NowPlayingSheet: View {
                 }
             }
             .background(artworkColor)
+            .sheet(isPresented: $showingCreatePlaylist) {
+                if let track = trackForNewPlaylist {
+                    CreatePlaylistSheet(initialTrack: track)
+                }
+            }
         }
     }
 
@@ -262,6 +269,33 @@ struct NowPlayingSheet: View {
                         .lineLimit(1)
 
                     if let track = playerService.currentTrack {
+                        // Add to Playlist menu
+                        Menu {
+                            ForEach(PlaylistStore.shared.playlists, id: \.id) { playlist in
+                                Button {
+                                    PlaylistStore.shared.addTrack(track, to: playlist)
+                                } label: {
+                                    Label(playlist.name ?? "Untitled", systemImage: "music.note.list")
+                                }
+                            }
+
+                            if !PlaylistStore.shared.playlists.isEmpty {
+                                Divider()
+                            }
+
+                            Button {
+                                trackForNewPlaylist = track
+                                showingCreatePlaylist = true
+                            } label: {
+                                Label("New Playlist...", systemImage: "plus")
+                            }
+                        } label: {
+                            Image(systemName: "text.badge.plus")
+                                .font(.title2)
+                                .foregroundStyle(artworkColor.contrastingForeground)
+                        }
+
+                        // Favorite button
                         Button {
                             FavoritesStore.shared.toggleTrackFavorite(track)
                         } label: {

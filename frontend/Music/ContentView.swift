@@ -64,24 +64,27 @@ struct ContentView: View {
             Label("No Music Yet", systemImage: "music.note")
         } description: {
             #if os(macOS)
-            Text("Go to the Upload tab to add your music library.")
+            Text("Upload music or sync your catalog from Settings.")
             #else
-            Text("Use the macOS app to upload your music library.")
+            Text("Open Settings to sync your catalog from the cloud.")
             #endif
         } actions: {
+            #if os(iOS)
             Button {
-                Task {
-                    await musicService.loadCatalog()
-                }
+                showingSettings = true
             } label: {
-                Label("Refresh", systemImage: "arrow.clockwise")
+                Label("Open Settings", systemImage: "gear")
             }
+            .buttonStyle(.borderedProminent)
+            #else
+            Button("Sync Catalog") {
+                selectedTab = .settings
+            }
+            .buttonStyle(.borderedProminent)
 
-            #if os(macOS)
             Button("Go to Upload") {
                 selectedTab = .upload
             }
-            .buttonStyle(.borderedProminent)
             #endif
         }
     }
@@ -170,7 +173,7 @@ struct ContentView: View {
                         } label: {
                             Image(systemName: "arrow.clockwise")
                         }
-                        .help("Refresh catalog")
+                        .help("Reload catalog from local storage")
                     }
                 }
                 .safeAreaInset(edge: .bottom) {
@@ -242,7 +245,7 @@ struct ContentView: View {
                 playerService.cacheService = cacheService
             }
             musicService.configure(modelContext: modelContext)
-            await musicService.loadCatalogWithRetry()
+            await musicService.loadCatalog()
             // Restore playback state after catalog loads
             if musicService.catalog != nil {
                 playerService.restorePlaybackState(from: musicService)

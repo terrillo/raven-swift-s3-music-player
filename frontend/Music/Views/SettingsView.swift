@@ -234,6 +234,16 @@ struct SettingsView: View {
         } message: {
             Text("This will delete all cached images. They will be re-downloaded as you browse.")
         }
+        .onChange(of: autoImageCachingEnabled) { _, enabled in
+            if !enabled {
+                Task { await cacheService.clearArtworkCache() }
+            } else {
+                cacheService.updateArtworkBackupExclusion()
+            }
+        }
+        .onChange(of: maxCacheSizeGB) { _, _ in
+            cacheService.updateTrackBackupExclusion()
+        }
     }
     #endif
 
@@ -436,6 +446,16 @@ struct SettingsView: View {
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text("This will delete all cached images. They will be re-downloaded as you browse.")
+            }
+            .onChange(of: autoImageCachingEnabled) { _, enabled in
+                if !enabled {
+                    Task { await cacheService.clearArtworkCache() }
+                } else {
+                    cacheService.updateArtworkBackupExclusion()
+                }
+            }
+            .onChange(of: maxCacheSizeGB) { _, _ in
+                cacheService.updateTrackBackupExclusion()
             }
         }
     }
