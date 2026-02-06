@@ -12,9 +12,17 @@ struct CacheDownloadView: View {
     var catalog: MusicCatalog?
 
     @State private var hasStarted = false
+    @State private var capturedUncachedTracks: [Track]?
 
     private var uncachedTracks: [Track] {
-        tracks.filter { !cacheService.isTrackCached($0) }
+        capturedUncachedTracks ?? tracks.filter { !cacheService.isTrackCached($0) }
+    }
+
+    private var failedCount: Int {
+        uncachedTracks.filter { track in
+            if case .failed = cacheService.trackDownloadStatus[track.s3Key] { return true }
+            return false
+        }.count
     }
 
     var body: some View {
@@ -30,6 +38,7 @@ struct CacheDownloadView: View {
                                 .foregroundStyle(.secondary)
                         } else {
                             Button {
+                                capturedUncachedTracks = tracks.filter { !cacheService.isTrackCached($0) }
                                 hasStarted = true
                                 Task {
                                     await cacheService.cacheAllMusic(tracks: uncachedTracks, artworkUrls: artworkUrls, catalog: catalog)
@@ -55,6 +64,21 @@ struct CacheDownloadView: View {
 
                         ProgressView(value: cacheService.currentProgress)
                             .tint(.appAccent)
+
+                        // Error display
+                        if let error = cacheService.error {
+                            Text(error)
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+
+                        // Failure count after completion
+                        if !cacheService.isDownloading && failedCount > 0 {
+                            Text("\(failedCount) download\(failedCount == 1 ? "" : "s") failed")
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                        }
                     }
                 }
                 .padding()
@@ -70,7 +94,7 @@ struct CacheDownloadView: View {
                     )
                 } else {
                     List {
-                        ForEach(hasStarted ? uncachedTracks : uncachedTracks) { track in
+                        ForEach(uncachedTracks) { track in
                             TrackDownloadRow(
                                 track: track,
                                 status: cacheService.trackDownloadStatus[track.s3Key] ?? .pending
@@ -93,6 +117,23 @@ struct CacheDownloadView: View {
                             .buttonStyle(.bordered)
                             .controlSize(.large)
                         } else {
+                            if failedCount > 0 {
+                                Button {
+                                    let failedTracks = uncachedTracks.filter { track in
+                                        if case .failed = cacheService.trackDownloadStatus[track.s3Key] { return true }
+                                        return false
+                                    }
+                                    Task {
+                                        await cacheService.cacheAllMusic(tracks: failedTracks, artworkUrls: [], catalog: catalog)
+                                    }
+                                } label: {
+                                    Label("Retry Failed", systemImage: "arrow.clockwise")
+                                        .frame(maxWidth: .infinity)
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.large)
+                            }
+
                             Button {
                                 dismiss()
                             } label: {

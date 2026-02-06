@@ -93,18 +93,18 @@ struct SongRow: View {
         return .secondary
     }
 
-    // Look up artist from musicService
+    // Look up artist from musicService (O(1) via dictionary)
     private var artist: Artist? {
         guard let artistName = track.artist,
               let musicService = musicService else { return nil }
-        return musicService.artists.first { $0.name == artistName }
+        return musicService.artistByName[artistName]
     }
 
-    // Look up album from musicService
+    // Look up album from musicService (O(1) via dictionary)
     private var album: Album? {
         guard let albumName = track.album,
               let musicService = musicService else { return nil }
-        return musicService.albums.first { $0.name == albumName }
+        return musicService.albumByName[albumName]
     }
 
     // MARK: - Body
@@ -312,11 +312,15 @@ struct SongRow: View {
         }
     }
 
-    private var formattedRelativeDate: String? {
-        guard let addedAt = track.addedAt else { return nil }
+    private static let relativeDateFormatter: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .abbreviated
-        return formatter.localizedString(for: addedAt, relativeTo: Date())
+        return formatter
+    }()
+
+    private var formattedRelativeDate: String? {
+        guard let addedAt = track.addedAt else { return nil }
+        return Self.relativeDateFormatter.localizedString(for: addedAt, relativeTo: Date())
     }
 
     // MARK: - Trailing View

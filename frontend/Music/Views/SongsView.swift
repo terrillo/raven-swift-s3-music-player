@@ -12,18 +12,22 @@ struct SongsView: View {
     var cacheService: CacheService?
 
     @State private var navigationPath = NavigationPath()
+    @State private var cachedFirstPlayableTrack: Track?
 
-    private var firstPlayableTrack: Track? {
-        musicService.songs.first { playerService.isTrackPlayable($0) }
-    }
+    private var firstPlayableTrack: Track? { cachedFirstPlayableTrack }
 
     private var hasPlayableTracks: Bool {
         firstPlayableTrack != nil
     }
 
+    private func updateFirstPlayableTrack() {
+        cachedFirstPlayableTrack = musicService.songs.first { playerService.isTrackPlayable($0) }
+    }
+
     var body: some View {
         NavigationStack(path: $navigationPath) {
             content
+                .onAppear { if cachedFirstPlayableTrack == nil { updateFirstPlayableTrack() } }
                 .navigationTitle("Songs")
                 .toolbar {
                     ToolbarItem(placement: .primaryAction) {

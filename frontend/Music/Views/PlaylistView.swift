@@ -108,8 +108,7 @@ struct PlaylistView: View {
                     NavigationLink {
                         StatisticsView(
                             musicService: musicService,
-                            playerService: playerService,
-                            cacheService: cacheService
+                            playerService: playerService
                         )
                     } label: {
                         Label("Statistics", systemImage: "chart.bar.fill")
@@ -139,10 +138,11 @@ struct FavoriteArtistsView: View {
     var cacheService: CacheService?
 
     private var favoriteArtists: [Artist] {
+        let artistById = Dictionary(musicService.artists.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let favoriteEntities = FavoritesStore.shared.fetchFavoriteArtists()
         return favoriteEntities.compactMap { entity in
             guard let artistId = entity.artistId else { return nil }
-            return musicService.artists.first { $0.id == artistId }
+            return artistById[artistId]
         }
     }
 
@@ -198,10 +198,11 @@ struct FavoriteAlbumsView: View {
     var cacheService: CacheService?
 
     private var favoriteAlbums: [Album] {
+        let albumById = Dictionary(musicService.albums.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let favoriteEntities = FavoritesStore.shared.fetchFavoriteAlbums()
         return favoriteEntities.compactMap { entity in
             guard let albumId = entity.albumId else { return nil }
-            return musicService.albums.first { $0.id == albumId }
+            return albumById[albumId]
         }
     }
 
@@ -266,7 +267,7 @@ struct FavoriteTracksView: View {
         let favoriteEntities = FavoritesStore.shared.fetchFavoriteTracks()
         return favoriteEntities.compactMap { entity in
             guard let s3Key = entity.trackS3Key else { return nil }
-            return musicService.songs.first { $0.s3Key == s3Key }
+            return musicService.trackByS3Key[s3Key]
         }
     }
 

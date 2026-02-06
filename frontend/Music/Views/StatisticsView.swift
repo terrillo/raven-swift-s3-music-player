@@ -9,7 +9,6 @@ import Charts
 struct StatisticsView: View {
     var musicService: MusicService
     var playerService: PlayerService
-    var cacheService: CacheService?
 
     @State private var selectedPeriod: TimePeriod = .month
     @State private var stats: ListeningStats?
@@ -106,10 +105,9 @@ struct StatisticsView: View {
         let songs = musicService.songs
         let period = selectedPeriod
 
-        await MainActor.run {
-            stats = StatisticsService.computeStats(for: period, songs: songs)
-            isLoading = false
-        }
+        let computed = StatisticsService.computeStats(for: period, songs: songs)
+        stats = computed
+        isLoading = false
     }
 }
 

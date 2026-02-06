@@ -20,11 +20,9 @@ class MusicService {
         case failed = "Failed"
     }
 
-    private(set) var catalog: MusicCatalog?
+    var catalog: MusicCatalog?
     private(set) var isLoading = false
     private(set) var loadingStage: LoadingStage = .idle
-    private(set) var retryCount: Int = 0
-    let maxRetries: Int = 3
     var error: Error?
     private(set) var lastUpdated: Date?
 
@@ -54,6 +52,7 @@ class MusicService {
     private var _cachedAlbums: [Album]?
     private var _cachedArtists: [Artist]?
     private var _artistByName: [String: Artist]?
+    private var _albumByName: [String: Album]?
     private var _trackByS3Key: [String: Track]?
     private var _cachedRecentlyAdded: [Track]?
 
@@ -119,15 +118,23 @@ class MusicService {
     /// O(1) lookup for artists by name
     var artistByName: [String: Artist] {
         if let cached = _artistByName { return cached }
-        let map = Dictionary(uniqueKeysWithValues: artists.map { ($0.name, $0) })
+        let map = Dictionary(artists.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
         _artistByName = map
+        return map
+    }
+
+    /// O(1) lookup for albums by name
+    var albumByName: [String: Album] {
+        if let cached = _albumByName { return cached }
+        let map = Dictionary(albums.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
+        _albumByName = map
         return map
     }
 
     /// O(1) lookup for tracks by s3Key
     var trackByS3Key: [String: Track] {
         if let cached = _trackByS3Key { return cached }
-        let map = Dictionary(uniqueKeysWithValues: songs.map { ($0.s3Key, $0) })
+        let map = Dictionary(songs.map { ($0.s3Key, $0) }, uniquingKeysWith: { first, _ in first })
         _trackByS3Key = map
         return map
     }
@@ -153,6 +160,7 @@ class MusicService {
         _cachedAlbums = nil
         _cachedArtists = nil
         _artistByName = nil
+        _albumByName = nil
         _trackByS3Key = nil
         _cachedRecentlyAdded = nil
     }
@@ -179,39 +187,10 @@ class MusicService {
         await loadCatalogTask?.value
     }
 
-    /// Load catalog with automatic retry on failure (up to maxRetries with exponential backoff)
-    func loadCatalogWithRetry(forceRefresh: Bool = false) async {
-        retryCount = 0
-        error = nil
-
-        while retryCount <= maxRetries {
-            await loadCatalog(forceRefresh: forceRefresh)
-
-            // Success: catalog loaded or legitimately empty (no error)
-            if error == nil {
-                loadingStage = .complete
-                return
-            }
-
-            retryCount += 1
-
-            // If we've exhausted retries, mark as failed
-            if retryCount > maxRetries {
-                loadingStage = .failed
-                return
-            }
-
-            // Exponential backoff: 1s, 2s, 4s
-            let delay = pow(2.0, Double(retryCount - 1))
-            try? await Task.sleep(for: .seconds(delay))
-        }
-    }
-
     /// Clear error state for manual retry
     func resetError() {
         error = nil
         loadingStage = .idle
-        retryCount = 0
     }
 
     private func performLoadCatalog(forceRefresh: Bool) async {
@@ -234,8 +213,8 @@ class MusicService {
         loadingStage = .checkingLocalCache
         await loadFromSwiftData()
 
-        // Only fetch from CDN when explicitly requested (via Settings "Sync Catalog")
-        if forceRefresh && (catalog?.artists.isEmpty ?? true) {
+        // Fetch from CDN when force refreshed OR when catalog is empty (first launch)
+        if forceRefresh || (catalog?.artists.isEmpty ?? true) {
             loadingStage = .fetchingFromCDN
             await fetchFromCDN()
         }
@@ -288,7 +267,10 @@ class MusicService {
 
             guard let httpResponse = response as? HTTPURLResponse,
                   httpResponse.statusCode == 200 else {
-                print("⚠️ Catalog not found on CDN (status: \((response as? HTTPURLResponse)?.statusCode ?? 0)) \(url)")
+                let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+                print("⚠️ Catalog not found on CDN (status: \(statusCode)) \(url)")
+                self.error = URLError(.badServerResponse)
+                loadingStage = .failed
                 return
             }
 

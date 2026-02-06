@@ -13,6 +13,10 @@ struct SidebarNowPlaying: View {
     var body: some View {
         if let track = playerService.currentTrack {
             VStack(spacing: 8) {
+                // Progress bar
+                ProgressView(value: playerService.progress)
+                    .tint(.accentColor)
+
                 // Track info row (tappable to open player)
                 Button {
                     showingPlayer = true
@@ -56,14 +60,17 @@ struct SidebarNowPlaying: View {
                             .font(.body)
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("Previous")
 
                     Button {
                         playerService.togglePlayPause()
                     } label: {
                         Image(systemName: playerService.isPlaying ? "pause.fill" : "play.fill")
                             .font(.body)
+                            .contentTransition(.symbolEffect(.replace))
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel(playerService.isPlaying ? "Pause" : "Play")
 
                     Button {
                         playerService.next()
@@ -72,6 +79,7 @@ struct SidebarNowPlaying: View {
                             .font(.body)
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("Next")
 
                     Spacer()
 
@@ -83,6 +91,7 @@ struct SidebarNowPlaying: View {
                             .foregroundStyle(FavoritesStore.shared.isTrackFavorite(track.s3Key) ? .pink : .secondary)
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel(FavoritesStore.shared.isTrackFavorite(track.s3Key) ? "Unfavorite" : "Favorite")
                 }
             }
             .padding(10)

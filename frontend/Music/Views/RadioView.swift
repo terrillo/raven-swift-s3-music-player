@@ -13,19 +13,15 @@ struct RadioView: View {
     var playerService: PlayerService
     var cacheService: CacheService?
 
-    @State private var selectedGenre: String?
-    @State private var selectedMood: String?
+    @State private var cachedAvailableGenres: [String] = []
+    @State private var cachedAvailableMoods: [String] = []
 
-    // All unique genres from catalog
-    private var availableGenres: [String] {
-        let genres = musicService.songs.compactMap { Genre.normalize($0.genre) }
-        return Array(Set(genres)).sorted()
-    }
+    private var availableGenres: [String] { cachedAvailableGenres }
+    private var availableMoods: [String] { cachedAvailableMoods }
 
-    // All unique moods from catalog
-    private var availableMoods: [String] {
-        let moods = musicService.songs.compactMap { $0.mood }
-        return Array(Set(moods)).sorted()
+    private func updateAvailableGenresAndMoods() {
+        cachedAvailableGenres = Array(Set(musicService.songs.compactMap { Genre.normalize($0.genre) })).sorted()
+        cachedAvailableMoods = Array(Set(musicService.songs.compactMap { $0.mood })).sorted()
     }
 
     var body: some View {
@@ -55,6 +51,14 @@ struct RadioView: View {
                 .padding()
             }
             .navigationTitle("Radio")
+            .overlay {
+                if musicService.isLoading {
+                    ProgressView("Loading...")
+                }
+            }
+            .onAppear {
+                if cachedAvailableGenres.isEmpty { updateAvailableGenresAndMoods() }
+            }
             #if os(iOS)
             .navigationBarTitleDisplayMode(.large)
             .toolbar {
@@ -289,7 +293,7 @@ struct RadioView: View {
             let topArtistNames = topTracks.compactMap { musicService.trackByS3Key[$0.s3Key]?.artist }
             let uniqueArtists = Array(Set(topArtistNames)).prefix(5)
             let artistObjects = uniqueArtists.compactMap { name in
-                musicService.artists.first { $0.name == name }
+                musicService.artistByName[name]
             }
 
             if artistObjects.isEmpty {

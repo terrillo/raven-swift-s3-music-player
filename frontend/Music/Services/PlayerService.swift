@@ -48,6 +48,9 @@ class PlayerService {
     private(set) var playHistory: [Track] = []
     private var playHistoryIndex: Int = -1  // Current position in history (-1 = at end)
 
+    // Debounce for rapid next/prev
+    private var skipDebounceTask: Task<Void, Never>?
+
     // Streaming mode
     var streamingEnabled: Bool {
         get { UserDefaults.standard.bool(forKey: "streamingModeEnabled") }
@@ -66,6 +69,7 @@ class PlayerService {
 
     var currentTime: TimeInterval = 0
     var duration: TimeInterval = 0
+    var isSeeking: Bool = false
 
     var hasTrack: Bool {
         currentTrack != nil
@@ -123,7 +127,7 @@ class PlayerService {
 
     var progress: Double {
         guard duration > 0 else { return 0 }
-        return currentTime / duration
+        return min(1.0, max(0, currentTime / duration))
     }
 
     // MARK: - Playability Check
@@ -243,12 +247,20 @@ class PlayerService {
             }
         }
 
-        // Get duration when ready
+        // Get duration when ready, handle failures
         itemObserver = playerItem.observe(\.status, options: [.new]) { [weak self] item, _ in
             Task { @MainActor in
-                if item.status == .readyToPlay {
+                switch item.status {
+                case .readyToPlay:
                     self?.duration = item.duration.seconds.isFinite ? item.duration.seconds : 0
                     self?.updateNowPlayingInfo()
+                case .failed:
+                    self?.isPlaying = false
+                    self?.updateNowPlayingInfo()
+                    // Auto-advance to next track on failure
+                    self?.next()
+                default:
+                    break
                 }
             }
         }
@@ -260,6 +272,9 @@ class PlayerService {
         isPlaying = true
         updateNowPlayingInfo()
 
+        // Clear any saved playback state now that playback has started successfully
+        PlaybackState.clear()
+
         // Pre-cache upcoming tracks when streaming
         triggerPreCache()
     }
@@ -268,7 +283,7 @@ class PlayerService {
         let interval = CMTime(seconds: 0.5, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
         timeObserver = player?.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
             Task { @MainActor in
-                guard let self = self else { return }
+                guard let self = self, !self.isSeeking else { return }
                 self.currentTime = time.seconds.isFinite ? time.seconds : 0
                 self.updateNowPlayingTime()
 
@@ -297,6 +312,11 @@ class PlayerService {
     }
 
     func togglePlayPause() {
+        // If player was released (e.g. after state restoration), recreate it
+        if player == nil && currentTrack != nil {
+            setupPlayer()
+            return
+        }
         if isPlaying {
             player?.pause()
         } else {
@@ -308,10 +328,15 @@ class PlayerService {
 
     func seek(to progress: Double) {
         guard duration > 0 else { return }
+        isSeeking = true
         let targetTime = CMTime(seconds: progress * duration, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
-        player?.seek(to: targetTime)
         currentTime = progress * duration
-        updateNowPlayingTime()
+        player?.seek(to: targetTime) { [weak self] _ in
+            Task { @MainActor in
+                self?.isSeeking = false
+                self?.updateNowPlayingTime()
+            }
+        }
     }
 
     func seekToTime(_ time: TimeInterval) {
@@ -324,6 +349,10 @@ class PlayerService {
 
     func next() {
         guard !queue.isEmpty else { return }
+
+        // Debounce rapid skips
+        skipDebounceTask?.cancel()
+        skipDebounceTask = nil
 
         // Record skip if played less than 3 seconds
         if currentTime > 0 && currentTime < 3 {
@@ -341,12 +370,20 @@ class PlayerService {
             }
 
             currentTrack = nextTrack
+            // Update album context from track's album name
+            if let albumName = nextTrack.album, currentAlbum?.name != albumName {
+                currentAlbum = nil // Clear stale album; views will look up by name
+            }
             updateSessionTracking(for: nextTrack, fromHistoryNavigation: true)
             setupPlayer()
             return
         }
 
         if isShuffled {
+            // Clear session played keys when most tracks have been played to prevent shuffle degeneration
+            if sessionPlayedKeys.count > Int(Double(queue.count) * 0.8) {
+                sessionPlayedKeys.removeAll()
+            }
             // Use weighted shuffle selection with context
             let context = buildShuffleContext()
             if let nextTrack = shuffleService.selectNextTrack(
@@ -388,6 +425,10 @@ class PlayerService {
     func previous() {
         guard !queue.isEmpty else { return }
 
+        // Debounce rapid skips
+        skipDebounceTask?.cancel()
+        skipDebounceTask = nil
+
         // If we're more than 3 seconds in, restart current track
         if currentTime > 3 {
             seek(to: 0)
@@ -410,6 +451,10 @@ class PlayerService {
             }
 
             currentTrack = previousTrack
+            // Update album context from track's album name
+            if let albumName = previousTrack.album, currentAlbum?.name != albumName {
+                currentAlbum = nil
+            }
             updateSessionTracking(for: previousTrack, fromHistoryNavigation: true)
             setupPlayer()
             return
@@ -441,7 +486,16 @@ class PlayerService {
         case .all:
             next()
         case .off:
-            if currentIndex < queue.count - 1 {
+            if isShuffled {
+                // In shuffle mode, continue as long as there are unplayed tracks
+                if sessionPlayedKeys.count < queue.count {
+                    next()
+                } else {
+                    isPlaying = false
+                    currentTime = 0
+                    updateNowPlayingInfo()
+                }
+            } else if currentIndex < queue.count - 1 {
                 next()
             } else {
                 isPlaying = false
@@ -543,23 +597,25 @@ class PlayerService {
             info[MPMediaItemPropertyAlbumTitle] = album
         }
 
-        // Load artwork from cache
-        if let artworkURL = currentLocalArtworkURL,
-           let imageData = try? Data(contentsOf: artworkURL) {
-            #if os(iOS)
-            if let image = UIImage(data: imageData) {
-                let artwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
-                info[MPMediaItemPropertyArtwork] = artwork
-            }
-            #else
-            if let image = NSImage(data: imageData) {
-                let artwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
-                info[MPMediaItemPropertyArtwork] = artwork
-            }
-            #endif
-        }
-
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+
+        // Load artwork from cache off main thread
+        if let artworkURL = currentLocalArtworkURL {
+            Task.detached(priority: .userInitiated) {
+                guard let imageData = try? Data(contentsOf: artworkURL) else { return }
+                #if os(iOS)
+                guard let image = UIImage(data: imageData) else { return }
+                #else
+                guard let image = NSImage(data: imageData) else { return }
+                #endif
+                let artwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+                await MainActor.run {
+                    var nowPlayingInfo = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? [:]
+                    nowPlayingInfo[MPMediaItemPropertyArtwork] = artwork
+                    MPNowPlayingInfoCenter.default().nowPlayingInfo = nowPlayingInfo
+                }
+            }
+        }
     }
 
     private func updateNowPlayingTime() {
@@ -574,8 +630,13 @@ class PlayerService {
 
     private func formatTime(_ time: TimeInterval) -> String {
         guard time.isFinite && time >= 0 else { return "0:00" }
-        let minutes = Int(time) / 60
-        let seconds = Int(time) % 60
+        let totalSeconds = Int(time)
+        let hours = totalSeconds / 3600
+        let minutes = (totalSeconds % 3600) / 60
+        let seconds = totalSeconds % 60
+        if hours > 0 {
+            return String(format: "%d:%02d:%02d", hours, minutes, seconds)
+        }
         return String(format: "%d:%02d", minutes, seconds)
     }
 
@@ -606,6 +667,10 @@ class PlayerService {
                 playHistory = Array(playHistory.prefix(playHistoryIndex + 1))
             }
             playHistory.append(track)
+            // Cap history to prevent unbounded growth
+            if playHistory.count > 100 {
+                playHistory.removeFirst(playHistory.count - 100)
+            }
             playHistoryIndex = playHistory.count - 1
         }
 
@@ -702,6 +767,9 @@ class PlayerService {
     }
 
     private func preCacheUpcomingTracks(cacheService: CacheService) async {
+        // Skip pre-cache in shuffle mode since next track is unpredictable
+        guard !isShuffled else { return }
+
         let preCacheCount = 3
         var tracksToCache: [Track] = []
         var index = currentIndex + 1
@@ -797,8 +865,8 @@ class PlayerService {
         currentTime = state.currentTime
         duration = Double(currentTrack?.duration ?? 0)
 
-        // Clear saved state after successful restore
-        PlaybackState.clear()
+        // Don't clear saved state here — clear it after the first successful setupPlayer()
+        // This ensures state survives if the app is killed before playback begins
     }
 
     func cleanup() {

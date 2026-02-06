@@ -11,15 +11,18 @@ struct GenreView: View {
     var playerService: PlayerService
     var cacheService: CacheService?
 
-    // Get unique genres with song counts, sorted alphabetically
-    private var genresWithCounts: [(genre: String, count: Int)] {
+    @State private var cachedGenresWithCounts: [(genre: String, count: Int)] = []
+
+    private var genresWithCounts: [(genre: String, count: Int)] { cachedGenresWithCounts }
+
+    private func updateGenresWithCounts() {
         var genreCounts: [String: Int] = [:]
         for track in musicService.songs {
             if let normalized = Genre.normalize(track.genre) {
                 genreCounts[normalized, default: 0] += 1
             }
         }
-        return genreCounts
+        cachedGenresWithCounts = genreCounts
             .map { (genre: $0.key, count: $0.value) }
             .sorted { $0.genre.localizedCaseInsensitiveCompare($1.genre) == .orderedAscending }
     }
@@ -28,6 +31,7 @@ struct GenreView: View {
         NavigationStack {
             content
                 .navigationTitle("Genres")
+                .onAppear { if cachedGenresWithCounts.isEmpty { updateGenresWithCounts() } }
                 .toolbar {
                     ToolbarItem(placement: .primaryAction) {
                         Button {

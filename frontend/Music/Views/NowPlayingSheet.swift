@@ -26,6 +26,7 @@ struct NowPlayingSheet: View {
     @State private var selectedSegment: QueueSegment = .playing
     @State private var showingCreatePlaylist = false
     @State private var trackForNewPlaylist: Track?
+    @State private var artworkColorTask: Task<Void, Never>?
 
     // Available segments based on shuffle state
     private var availableSegments: [QueueSegment] {
@@ -36,13 +37,13 @@ struct NowPlayingSheet: View {
         }
     }
 
-    // Look up Artist object by album_artist name
+    // Look up Artist object by album_artist name (O(1) via dictionary)
     private var currentArtist: Artist? {
         guard let albumArtist = playerService.currentTrack?.albumArtist else { return nil }
-        return musicService.artists.first { $0.name == albumArtist }
+        return musicService.artistByName[albumArtist]
     }
 
-    // Look up Album object by album name within the current artist
+    // Look up Album object by album name (O(1) via dictionary)
     private var currentAlbumObject: Album? {
         guard let albumName = playerService.currentTrack?.album else { return nil }
         // First try to find within current artist's albums
@@ -51,8 +52,8 @@ struct NowPlayingSheet: View {
                 return album
             }
         }
-        // Fall back to searching all albums
-        return musicService.albums.first { $0.name == albumName }
+        // Fall back to O(1) dictionary lookup
+        return musicService.albumByName[albumName]
     }
 
     private func extractArtworkColor() {
@@ -73,24 +74,23 @@ struct NowPlayingSheet: View {
         // Fall back to downloading if we have a URL
         if let urlString = playerService.currentArtworkUrl,
            let url = URL(string: urlString) {
-            Task {
+            artworkColorTask?.cancel()
+            artworkColorTask = Task {
                 do {
                     let (data, _) = try await URLSession.shared.data(from: url)
-                    await MainActor.run {
-                        #if os(iOS)
-                        if let image = UIImage(data: data), let color = image.averageColor {
-                            withAnimation(.easeInOut(duration: 0.5)) {
-                                artworkColor = color
-                            }
+                    #if os(iOS)
+                    if let image = UIImage(data: data), let color = image.averageColor {
+                        withAnimation(.easeInOut(duration: 0.5)) {
+                            artworkColor = color
                         }
-                        #else
-                        if let image = NSImage(data: data), let color = image.averageColor {
-                            withAnimation(.easeInOut(duration: 0.5)) {
-                                artworkColor = color
-                            }
-                        }
-                        #endif
                     }
+                    #else
+                    if let image = NSImage(data: data), let color = image.averageColor {
+                        withAnimation(.easeInOut(duration: 0.5)) {
+                            artworkColor = color
+                        }
+                    }
+                    #endif
                 } catch {
                     // Silently fail - keep default color
                 }
@@ -99,20 +99,21 @@ struct NowPlayingSheet: View {
     }
 
     private func extractColor(from url: URL) {
-        guard let data = try? Data(contentsOf: url) else { return }
-        #if os(iOS)
-        if let image = UIImage(data: data), let color = image.averageColor {
+        artworkColorTask?.cancel()
+        artworkColorTask = Task {
+            let data = await Task.detached(priority: .userInitiated) {
+                try? Data(contentsOf: url)
+            }.value
+            guard let data else { return }
+            #if os(iOS)
+            guard let image = UIImage(data: data), let color = image.averageColor else { return }
+            #else
+            guard let image = NSImage(data: data), let color = image.averageColor else { return }
+            #endif
             withAnimation(.easeInOut(duration: 0.5)) {
                 artworkColor = color
             }
         }
-        #else
-        if let image = NSImage(data: data), let color = image.averageColor {
-            withAnimation(.easeInOut(duration: 0.5)) {
-                artworkColor = color
-            }
-        }
-        #endif
     }
 
     var body: some View {
@@ -167,6 +168,10 @@ struct NowPlayingSheet: View {
             }
             .onChange(of: playerService.currentTrack?.s3Key) { _, _ in
                 extractArtworkColor()
+            }
+            .onDisappear {
+                artworkColorTask?.cancel()
+                artworkColorTask = nil
             }
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
@@ -378,10 +383,20 @@ struct NowPlayingSheet: View {
         VStack(spacing: 20) {
             // Progress Bar
             VStack(spacing: 8) {
-                Slider(value: Binding(
-                    get: { playerService.progress },
-                    set: { playerService.seek(to: $0) }
-                ))
+                Slider(
+                    value: Binding(
+                        get: { playerService.progress },
+                        set: { newValue in
+                            playerService.currentTime = newValue * playerService.duration
+                        }
+                    ),
+                    onEditingChanged: { editing in
+                        playerService.isSeeking = editing
+                        if !editing {
+                            playerService.seek(to: playerService.progress)
+                        }
+                    }
+                )
                 .tint(artworkColor.contrastingForeground)
 
                 HStack {
@@ -417,6 +432,7 @@ struct NowPlayingSheet: View {
                     Image(systemName: playerService.isPlaying ? "pause.circle.fill" : "play.circle.fill")
                         .font(.system(size: 70))
                         .foregroundStyle(artworkColor.contrastingForeground)
+                        .contentTransition(.symbolEffect(.replace))
                 }
                 .accessibilityLabel(playerService.isPlaying ? "Pause" : "Play")
                 .buttonStyle(.plain)
@@ -477,12 +493,7 @@ struct NowPlayingSheet: View {
 //        .padding(.horizontal, 32)
 //        .padding(.vertical, 28)
 //        .glassEffect(.clear, in: .rect(cornerRadius: 24))
-        #if os(iOS)
-        .frame(maxWidth: UIScreen.main.bounds.width - 40)
-        #endif
-        #if os(macOS)
-        .padding(.horizontal, 24)
-        #endif
+        .padding(.horizontal, 20)
     }
 
     private var repeatIcon: String {

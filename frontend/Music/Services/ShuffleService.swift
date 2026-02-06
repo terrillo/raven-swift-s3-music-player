@@ -77,12 +77,13 @@ class ShuffleService {
 
         let trackKeys = Set(tracks.map { $0.s3Key })
 
-        // Fetch all analytics data
-        let playCounts = AnalyticsStore.shared.fetchPlayCounts(for: trackKeys)
-        let skipData = AnalyticsStore.shared.fetchRecentSkips(for: trackKeys)
-        let lastPlayDates = AnalyticsStore.shared.fetchLastPlayDates(for: trackKeys)
-        let completionRates = AnalyticsStore.shared.fetchCompletionRates(for: trackKeys)
-        let timeOfDayScores = AnalyticsStore.shared.fetchTimeOfDayPreferences(for: trackKeys)
+        // Fetch all analytics in a single batch (fewer DB queries)
+        let analytics = AnalyticsStore.shared.fetchAllAnalytics(for: trackKeys)
+        let playCounts = analytics.playCounts
+        let skipData = analytics.skipData
+        let lastPlayDates = analytics.lastPlayDates
+        let completionRates = analytics.completionRates
+        let timeOfDayScores = analytics.timeOfDayScores
 
         return tracks.map { track in
             let weight = calculateWeight(

@@ -21,8 +21,6 @@ final class ImageCache {
     static let shared = ImageCache()
 
     private let cache = NSCache<NSString, PlatformImage>()
-    private let queue = DispatchQueue(label: "com.terrillo.Music.ImageCache", attributes: .concurrent)
-
     private init() {
         // Limit cache to ~100MB on iOS, ~200MB on macOS
         #if os(iOS)
@@ -60,6 +58,7 @@ struct ArtworkImage: View {
     var localURL: URL? = nil
     var cacheService: CacheService? = nil
     var isCircular: Bool = false
+    var accessibilityDescription: String? = nil
 
     @AppStorage("autoImageCachingEnabled") private var autoImageCachingEnabled = true
     @State private var cachedLocalURL: URL? = nil
@@ -119,6 +118,7 @@ struct ArtworkImage: View {
             hasTriggeredDownload = false
         }
         .animation(.easeInOut(duration: 0.2), value: loadedImage != nil)
+        .accessibilityLabel(accessibilityDescription ?? "Artwork")
     }
 
     private func loadImageAsync() async {
@@ -385,9 +385,13 @@ struct ArtistsView: View {
         GridItem(.adaptive(minimum: 160, maximum: 200), spacing: 16)
     ]
 
-    private var sortedArtists: [Artist] {
+    @State private var cachedSortedArtists: [Artist] = []
+
+    private var sortedArtists: [Artist] { cachedSortedArtists }
+
+    private func updateSortedArtists() {
         let favorites = FavoritesStore.shared.favoriteArtistIds
-        return musicService.artists.sorted { a, b in
+        cachedSortedArtists = musicService.artists.sorted { a, b in
             let aIsFavorite = favorites.contains(a.id)
             let bIsFavorite = favorites.contains(b.id)
             if aIsFavorite != bIsFavorite {
@@ -418,6 +422,7 @@ struct ArtistsView: View {
                 }
             }
             .navigationTitle("Artists")
+            .onAppear { if cachedSortedArtists.isEmpty { updateSortedArtists() } }
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     HStack(spacing: 12) {
@@ -650,7 +655,7 @@ struct AlbumDetailView: View {
 
     private var artist: Artist? {
         guard let name = artistName else { return nil }
-        return musicService.artists.first { $0.name == name }
+        return musicService.artistByName[name]
     }
 
     private func extractArtworkColor() {
@@ -691,20 +696,20 @@ struct AlbumDetailView: View {
     }
 
     private func extractColor(from url: URL) {
-        guard let data = try? Data(contentsOf: url) else { return }
-        #if os(iOS)
-        if let image = UIImage(data: data), let color = image.averageColor {
+        Task {
+            let data = await Task.detached(priority: .userInitiated) {
+                try? Data(contentsOf: url)
+            }.value
+            guard let data else { return }
+            #if os(iOS)
+            guard let image = UIImage(data: data), let color = image.averageColor else { return }
+            #else
+            guard let image = NSImage(data: data), let color = image.averageColor else { return }
+            #endif
             withAnimation(.easeInOut(duration: 0.5)) {
                 artworkColor = color
             }
         }
-        #else
-        if let image = NSImage(data: data), let color = image.averageColor {
-            withAnimation(.easeInOut(duration: 0.5)) {
-                artworkColor = color
-            }
-        }
-        #endif
     }
 
     var body: some View {

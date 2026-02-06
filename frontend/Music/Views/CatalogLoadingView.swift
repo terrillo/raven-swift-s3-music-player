@@ -56,12 +56,6 @@ struct CatalogLoadingView: View {
                         .controlSize(.regular)
                 }
 
-                // Retry attempt indicator
-                if musicService.retryCount > 0 && !isError {
-                    Text("Attempt \(musicService.retryCount + 1) of \(musicService.maxRetries + 1)")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                }
             }
 
             if isError {
@@ -69,7 +63,7 @@ struct CatalogLoadingView: View {
                     Button {
                         Task {
                             musicService.resetError()
-                            await musicService.loadCatalogWithRetry(forceRefresh: true)
+                            await musicService.loadCatalog(forceRefresh: true)
                         }
                     } label: {
                         Label("Try Again", systemImage: "arrow.clockwise")

@@ -17,9 +17,13 @@ struct AlbumsView: View {
         GridItem(.adaptive(minimum: 160, maximum: 200), spacing: 16)
     ]
 
-    private var sortedAlbums: [Album] {
+    @State private var cachedSortedAlbums: [Album] = []
+
+    private var sortedAlbums: [Album] { cachedSortedAlbums }
+
+    private func updateSortedAlbums() {
         let favorites = FavoritesStore.shared.favoriteAlbumIds
-        return musicService.albums.sorted { a, b in
+        cachedSortedAlbums = musicService.albums.sorted { a, b in
             let aIsFavorite = favorites.contains(a.id)
             let bIsFavorite = favorites.contains(b.id)
             if aIsFavorite != bIsFavorite {
@@ -50,6 +54,7 @@ struct AlbumsView: View {
                 }
             }
             .navigationTitle("Albums")
+            .onAppear { if cachedSortedAlbums.isEmpty { updateSortedAlbums() } }
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     HStack(spacing: 12) {

@@ -190,11 +190,12 @@ class AnalyticsStore {
     /// Returns play counts for a set of track keys (all-time)
     func fetchPlayCounts(for trackKeys: Set<String>) -> [String: Int] {
         let request = NSFetchRequest<PlayEventEntity>(entityName: "PlayEventEntity")
+        request.predicate = NSPredicate(format: "trackS3Key IN %@", trackKeys)
         guard let events = try? viewContext.fetch(request) else { return [:] }
 
         var counts: [String: Int] = [:]
         for event in events {
-            guard let key = event.trackS3Key, trackKeys.contains(key) else { continue }
+            guard let key = event.trackS3Key else { continue }
             counts[key, default: 0] += 1
         }
         return counts
@@ -227,6 +228,7 @@ class AnalyticsStore {
     /// Returns most recent play date for each track
     func fetchLastPlayDates(for trackKeys: Set<String>) -> [String: Date] {
         let request = NSFetchRequest<PlayEventEntity>(entityName: "PlayEventEntity")
+        request.predicate = NSPredicate(format: "trackS3Key IN %@", trackKeys)
         guard let events = try? viewContext.fetch(request) else { return [:] }
 
         var lastPlayed: [String: Date] = [:]
@@ -244,6 +246,7 @@ class AnalyticsStore {
     /// Returns average completion rate for tracks (0.0 to 1.0)
     func fetchCompletionRates(for trackKeys: Set<String>) -> [String: Double] {
         let request = NSFetchRequest<PlayEventEntity>(entityName: "PlayEventEntity")
+        request.predicate = NSPredicate(format: "trackS3Key IN %@", trackKeys)
         guard let events = try? viewContext.fetch(request) else { return [:] }
 
         var totals: [String: (sum: Double, count: Int)] = [:]
@@ -273,6 +276,7 @@ class AnalyticsStore {
         }()
 
         let request = NSFetchRequest<PlayEventEntity>(entityName: "PlayEventEntity")
+        request.predicate = NSPredicate(format: "trackS3Key IN %@", trackKeys)
         guard let events = try? viewContext.fetch(request) else { return [:] }
 
         var counts: [String: Int] = [:]
@@ -306,6 +310,93 @@ class AnalyticsStore {
             scores[key] = Double(count)
         }
         return scores
+    }
+
+    // MARK: - Batch Analytics for ShuffleService
+
+    struct AnalyticsBatch {
+        var playCounts: [String: Int] = [:]
+        var skipData: [String: (count: Int, mostRecent: Date?)] = [:]
+        var lastPlayDates: [String: Date] = [:]
+        var completionRates: [String: Double] = [:]
+        var timeOfDayScores: [String: Double] = [:]
+    }
+
+    /// Fetch all analytics needed by ShuffleService in a single batch (fewer DB queries)
+    func fetchAllAnalytics(for trackKeys: Set<String>) -> AnalyticsBatch {
+        var batch = AnalyticsBatch()
+
+        // Single fetch for play events
+        let playRequest = NSFetchRequest<PlayEventEntity>(entityName: "PlayEventEntity")
+        playRequest.predicate = NSPredicate(format: "trackS3Key IN %@", trackKeys)
+        let playEvents = (try? viewContext.fetch(playRequest)) ?? []
+
+        // Compute time-of-day period
+        let hour = Calendar.current.component(.hour, from: Date())
+        let periodRange: (start: Int, end: Int) = {
+            switch hour {
+            case 5..<12: return (5, 12)
+            case 12..<17: return (12, 17)
+            case 17..<21: return (17, 21)
+            default: return (21, 5)
+            }
+        }()
+        let calendar = Calendar.current
+
+        // Single pass over play events to compute all metrics
+        var completionTotals: [String: (sum: Double, count: Int)] = [:]
+        for event in playEvents {
+            guard let key = event.trackS3Key else { continue }
+
+            // Play count
+            batch.playCounts[key, default: 0] += 1
+
+            // Last play date
+            if let date = event.playedAt {
+                if batch.lastPlayDates[key] == nil || date > batch.lastPlayDates[key]! {
+                    batch.lastPlayDates[key] = date
+                }
+
+                // Time of day
+                let eventHour = calendar.component(.hour, from: date)
+                let inPeriod: Bool
+                if periodRange.start < periodRange.end {
+                    inPeriod = eventHour >= periodRange.start && eventHour < periodRange.end
+                } else {
+                    inPeriod = eventHour >= periodRange.start || eventHour < periodRange.end
+                }
+                if inPeriod {
+                    batch.timeOfDayScores[key, default: 0] += 1
+                }
+            }
+
+            // Completion rate
+            let existing = completionTotals[key] ?? (0.0, 0)
+            completionTotals[key] = (existing.sum + event.completionRate, existing.count + 1)
+        }
+
+        for (key, data) in completionTotals {
+            batch.completionRates[key] = data.count > 0 ? data.sum / Double(data.count) : 1.0
+        }
+
+        // Single fetch for skip events
+        let skipRequest = NSFetchRequest<SkipEventEntity>(entityName: "SkipEventEntity")
+        let cutoffDate = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date()
+        skipRequest.predicate = NSPredicate(format: "trackS3Key IN %@ AND skippedAt >= %@", trackKeys, cutoffDate as NSDate)
+        let skipEvents = (try? viewContext.fetch(skipRequest)) ?? []
+
+        for event in skipEvents {
+            guard let key = event.trackS3Key else { continue }
+            let existing = batch.skipData[key] ?? (0, nil)
+            let mostRecent: Date? = {
+                guard let eventDate = event.skippedAt else { return existing.mostRecent }
+                guard let existingDate = existing.mostRecent else { return eventDate }
+                return eventDate > existingDate ? eventDate : existingDate
+            }()
+            batch.skipData[key] = (existing.count + 1, mostRecent)
+        }
+
+        return batch
     }
 
     // MARK: - Co-Play Pairs for Affinity

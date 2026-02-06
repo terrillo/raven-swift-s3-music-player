@@ -92,7 +92,7 @@ struct ContentView: View {
     var body: some View {
         Group {
             #if os(iOS)
-            if musicService.isLoading || musicService.loadingStage == .failed {
+            if musicService.isLoading || musicService.loadingStage == .failed || (musicService.catalog == nil && musicService.loadingStage == .idle) {
                 CatalogLoadingView(musicService: musicService)
             } else if musicService.isEmpty {
                 emptyStateView
@@ -107,31 +107,31 @@ struct ContentView: View {
                         cacheService: cacheService
                     )
                     .tabItem {
-                        Image(systemName: "house.fill")
+                        Label("Home", systemImage: "house.fill")
                     }
                     .tag(Tab.home)
 
                     SongsView(showingSearch: $showingSearch, musicService: musicService, playerService: playerService, cacheService: cacheService)
                         .tabItem {
-                            Image(systemName: "music.note")
+                            Label("Songs", systemImage: "music.note")
                         }
                         .tag(Tab.songs)
 
                     ArtistsView(showingSearch: $showingSearch, musicService: musicService, playerService: playerService, cacheService: cacheService, pendingNavigation: .constant(nil))
                         .tabItem {
-                            Image(systemName: "person.3.sequence.fill")
+                            Label("Artists", systemImage: "person.3.sequence.fill")
                         }
                         .tag(Tab.artists)
 
                     PlaylistView(showingSearch: $showingSearch, musicService: musicService, playerService: playerService, cacheService: cacheService)
                         .tabItem {
-                            Image(systemName: "music.note.square.stack")
+                            Label("Playlists", systemImage: "music.note.square.stack")
                         }
                         .tag(Tab.playlists)
 
                     RadioView(showingSearch: $showingSearch, musicService: musicService, playerService: playerService, cacheService: cacheService)
                         .tabItem {
-                            Image(systemName: "antenna.radiowaves.left.and.right")
+                            Label("Radio", systemImage: "antenna.radiowaves.left.and.right")
                         }
                         .tag(Tab.radio)
                 }
@@ -147,13 +147,15 @@ struct ContentView: View {
                     NowPlayingSheet(playerService: playerService, musicService: musicService, cacheService: cacheService)
                 }
                 .sheet(isPresented: $showingSettings) {
-                    NavigationStack {
-                        SettingsView(showingSearch: $showingSearch, cacheService: cacheService ?? CacheService(modelContext: modelContext), musicService: musicService)
-                            .toolbar {
-                                ToolbarItem(placement: .cancellationAction) {
-                                    Button("Done") { showingSettings = false }
+                    if let cacheService {
+                        NavigationStack {
+                            SettingsView(showingSearch: $showingSearch, cacheService: cacheService, musicService: musicService)
+                                .toolbar {
+                                    ToolbarItem(placement: .cancellationAction) {
+                                        Button("Done") { showingSettings = false }
+                                    }
                                 }
-                            }
+                        }
                     }
                 }
             }  // end else (has content)
@@ -182,7 +184,7 @@ struct ContentView: View {
                     }
                 }
             } detail: {
-                if musicService.isLoading || musicService.loadingStage == .failed {
+                if musicService.isLoading || musicService.loadingStage == .failed || (musicService.catalog == nil && musicService.loadingStage == .idle) {
                     CatalogLoadingView(musicService: musicService)
                 } else {
                     switch selectedTab {
@@ -221,7 +223,11 @@ struct ContentView: View {
                     case .upload:
                         UploadView()
                     case .settings:
-                        SettingsView(showingSearch: $showingSearch, cacheService: cacheService ?? CacheService(modelContext: modelContext), musicService: musicService)
+                        if let cacheService {
+                            SettingsView(showingSearch: $showingSearch, cacheService: cacheService, musicService: musicService)
+                        } else {
+                            ProgressView("Loading...")
+                        }
                     }
                 }
             }
@@ -253,10 +259,14 @@ struct ContentView: View {
         }
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .active {
-                Task {
-                    await musicService.loadCatalog()
+                // Only reload if stale (>5 min since last update)
+                let isStale = musicService.lastUpdated.map { Date().timeIntervalSince($0) > 300 } ?? true
+                if isStale {
+                    Task {
+                        await musicService.loadCatalog()
+                    }
                 }
-            } else if newPhase == .background {
+            } else if newPhase == .background || newPhase == .inactive {
                 playerService.savePlaybackState()
             }
         }

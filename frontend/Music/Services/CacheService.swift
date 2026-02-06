@@ -267,10 +267,11 @@ class CacheService {
     }
 
     func localURL(for track: Track) -> URL? {
-        // Fast path: check in-memory cache first to avoid DB query
-        guard cachedTrackKeys.contains(track.s3Key) else { return nil }
+        // Try fast path first (no DB query)
+        if let url = localURLFast(for: track) { return url }
 
-        // Only query DB if we know it's cached
+        // Fall back to DB query
+        guard cachedTrackKeys.contains(track.s3Key) else { return nil }
         let descriptor = FetchDescriptor<CachedTrack>(
             predicate: #Predicate { $0.s3Key == track.s3Key }
         )
@@ -279,6 +280,24 @@ class CacheService {
 
         let localURL = tracksDirectory.appendingPathComponent(cached.localFileName)
         guard FileManager.default.fileExists(atPath: localURL.path) else { return nil }
+        return localURL
+    }
+
+    /// Fast track URL lookup without DB query — mirrors localArtworkURLFast pattern
+    func localURLFast(for track: Track) -> URL? {
+        guard cachedTrackKeys.contains(track.s3Key) else { return nil }
+
+        // Compute filename deterministically (same logic as downloadTrack)
+        guard let urlString = track.url, let url = URL(string: urlString) else { return nil }
+        let fileExtension = url.pathExtension.isEmpty ? track.format : url.pathExtension
+        let fileName = "\(sha256Hash(track.s3Key)).\(fileExtension)"
+        let localURL = tracksDirectory.appendingPathComponent(fileName)
+
+        guard FileManager.default.fileExists(atPath: localURL.path) else {
+            cachedTrackKeys.remove(track.s3Key)
+            return nil
+        }
+
         return localURL
     }
 
@@ -452,7 +471,6 @@ class CacheService {
         isCancelled = false
         error = nil
         completedFiles = 0
-        totalFiles = tracks.count + artworkUrls.count
         currentProgress = 0
 
         // Build lookup maps for artist/album context
@@ -485,9 +503,12 @@ class CacheService {
         // Count already cached artwork using fast in-memory lookup
         let alreadyCachedArtwork = artworkUrls.filter { isArtworkCached($0) }.count
 
-        // Update progress for already cached items
-        completedFiles = alreadyCachedCount + alreadyCachedArtwork
-        currentProgress = Double(completedFiles) / Double(totalFiles)
+        // Set totalFiles to only count items needing download
+        let tracksToDownloadCount = tracks.count - alreadyCachedCount
+        let artworkToDownloadCount = artworkUrls.count - alreadyCachedArtwork
+        totalFiles = tracksToDownloadCount + artworkToDownloadCount
+        completedFiles = 0
+        currentProgress = totalFiles > 0 ? 0 : 1.0
 
         do {
             try ensureDirectoriesExist()
@@ -537,10 +558,13 @@ class CacheService {
                         await group.next()
                         activeDownloads -= 1
                         completedFiles += 1
-                        currentProgress = Double(completedFiles) / Double(totalFiles)
+                        currentProgress = totalFiles > 0 ? Double(completedFiles) / Double(totalFiles) : 1.0
                     }
                 }
             }
+
+            // Enforce storage limit once after all downloads complete
+            await enforceStorageLimit()
 
         } catch {
             self.error = error.localizedDescription
@@ -626,9 +650,6 @@ class CacheService {
 
             trackDownloadStatus[track.s3Key] = .completed
 
-            // Enforce storage limit after successful download
-            await enforceStorageLimit()
-
         } catch {
             trackDownloadStatus[track.s3Key] = .failed(error: error.localizedDescription)
             print("Failed to download track \(track.title): \(error)")
@@ -694,7 +715,7 @@ class CacheService {
         artworkDownloadsInProgress.insert(urlString)
 
         // Fire-and-forget download that won't be cancelled
-        Task.detached { [weak self] in
+        Task { [weak self] in
             guard let self = self else { return }
             await self.downloadArtworkBackground(urlString, completion: completion)
         }
@@ -769,16 +790,8 @@ class CacheService {
 
     // MARK: - Cancel
 
-    /// Track active download tasks for cancellation
-    private var activeDownloadTasks: [String: URLSessionDataTask] = [:]
-
     func cancelDownload() {
         isCancelled = true
-        // Cancel all active URLSession tasks
-        for (_, task) in activeDownloadTasks {
-            task.cancel()
-        }
-        activeDownloadTasks.removeAll()
     }
 
     // MARK: - Backup Exclusion Updates

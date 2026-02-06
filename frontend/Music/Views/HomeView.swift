@@ -16,6 +16,8 @@ struct HomeView: View {
     var cacheService: CacheService?
 
     @State private var navigationPath = NavigationPath()
+    @State private var cachedTopTracks: [(track: Track, playCount: Int)] = []
+    @State private var cachedTopGenres: [String] = []
 
     var body: some View {
         NavigationStack(path: $navigationPath) {
@@ -26,6 +28,15 @@ struct HomeView: View {
                     genreBrowseSection
                 }
                 .padding()
+            }
+            .refreshable {
+                await musicService.loadCatalog(forceRefresh: true)
+                updateTopTracks()
+                updateTopGenres()
+            }
+            .task {
+                if cachedTopTracks.isEmpty { updateTopTracks() }
+                if cachedTopGenres.isEmpty { updateTopGenres() }
             }
             .navigationTitle("Home")
             .toolbar {
@@ -118,9 +129,11 @@ struct HomeView: View {
         }
     }
 
-    private var topTracks: [(track: Track, playCount: Int)] {
+    private var topTracks: [(track: Track, playCount: Int)] { cachedTopTracks }
+
+    private func updateTopTracks() {
         let data = AnalyticsStore.shared.fetchTopTracks(limit: 5, period: .allTime)
-        return data.compactMap { (s3Key, count) in
+        cachedTopTracks = data.compactMap { (s3Key, count) in
             guard let track = musicService.trackByS3Key[s3Key] else { return nil }
             return (track: track, playCount: count)
         }
@@ -228,14 +241,16 @@ struct HomeView: View {
         }
     }
 
-    private var topGenres: [String] {
+    private var topGenres: [String] { cachedTopGenres }
+
+    private func updateTopGenres() {
         var genreCounts: [String: Int] = [:]
         for track in musicService.songs {
             if let normalized = Genre.normalize(track.genre) {
                 genreCounts[normalized, default: 0] += 1
             }
         }
-        return genreCounts
+        cachedTopGenres = genreCounts
             .sorted { $0.value > $1.value }
             .prefix(8)
             .map { $0.key }

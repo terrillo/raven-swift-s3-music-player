@@ -15,6 +15,7 @@ struct SettingsView: View {
     @AppStorage("autoImageCachingEnabled") private var autoImageCachingEnabled = true
     @AppStorage("maxCacheSizeGB") private var maxCacheSizeGB: Int = 0
     @State private var cdnPrefix: String = NSUbiquitousKeyValueStore.default.string(forKey: "cdnPrefix") ?? MusicService.defaultCDNPrefix
+    @State private var iCloudObserver: NSObjectProtocol?
     @State private var showingCacheSheet = false
     @State private var showingClearConfirmation = false
     @State private var showingDeleteAllConfirmation = false
@@ -218,6 +219,8 @@ struct SettingsView: View {
                 Task {
                     await cacheService.clearAllData()
                     AnalyticsStore.shared.clearAllData()
+                    musicService.invalidateCaches()
+                    musicService.catalog = nil
                 }
             }
             Button("Cancel", role: .cancel) {}
@@ -236,13 +239,34 @@ struct SettingsView: View {
         }
         .onChange(of: autoImageCachingEnabled) { _, enabled in
             if !enabled {
-                Task { await cacheService.clearArtworkCache() }
+                showingClearImageCacheConfirmation = true
             } else {
                 cacheService.updateArtworkBackupExclusion()
             }
         }
-        .onChange(of: maxCacheSizeGB) { _, _ in
+        .onChange(of: maxCacheSizeGB) { _, newValue in
+            let clamped = max(0, newValue)
+            if clamped != newValue {
+                maxCacheSizeGB = clamped
+            }
             cacheService.updateTrackBackupExclusion()
+        }
+        .onAppear {
+            iCloudObserver = NotificationCenter.default.addObserver(
+                forName: NSUbiquitousKeyValueStore.didChangeExternallyNotification,
+                object: NSUbiquitousKeyValueStore.default,
+                queue: .main
+            ) { _ in
+                if let newPrefix = NSUbiquitousKeyValueStore.default.string(forKey: "cdnPrefix") {
+                    cdnPrefix = newPrefix
+                }
+            }
+        }
+        .onDisappear {
+            if let observer = iCloudObserver {
+                NotificationCenter.default.removeObserver(observer)
+                iCloudObserver = nil
+            }
         }
     }
     #endif
@@ -428,9 +452,14 @@ struct SettingsView: View {
             }
             .confirmationDialog("Delete All Data", isPresented: $showingDeleteAllConfirmation) {
                 Button("Delete All Data", role: .destructive) {
+                    #if os(iOS)
+                    UINotificationFeedbackGenerator().notificationOccurred(.warning)
+                    #endif
                     Task {
                         await cacheService.clearAllData()
                         AnalyticsStore.shared.clearAllData()
+                        musicService.invalidateCaches()
+                        musicService.catalog = nil
                     }
                 }
                 Button("Cancel", role: .cancel) {}
@@ -449,13 +478,34 @@ struct SettingsView: View {
             }
             .onChange(of: autoImageCachingEnabled) { _, enabled in
                 if !enabled {
-                    Task { await cacheService.clearArtworkCache() }
+                    showingClearImageCacheConfirmation = true
                 } else {
                     cacheService.updateArtworkBackupExclusion()
                 }
             }
-            .onChange(of: maxCacheSizeGB) { _, _ in
+            .onChange(of: maxCacheSizeGB) { _, newValue in
+                let clamped = max(0, newValue)
+                if clamped != newValue {
+                    maxCacheSizeGB = clamped
+                }
                 cacheService.updateTrackBackupExclusion()
+            }
+            .onAppear {
+                iCloudObserver = NotificationCenter.default.addObserver(
+                    forName: NSUbiquitousKeyValueStore.didChangeExternallyNotification,
+                    object: NSUbiquitousKeyValueStore.default,
+                    queue: .main
+                ) { _ in
+                    if let newPrefix = NSUbiquitousKeyValueStore.default.string(forKey: "cdnPrefix") {
+                        cdnPrefix = newPrefix
+                    }
+                }
+            }
+            .onDisappear {
+                if let observer = iCloudObserver {
+                    NotificationCenter.default.removeObserver(observer)
+                    iCloudObserver = nil
+                }
             }
         }
     }

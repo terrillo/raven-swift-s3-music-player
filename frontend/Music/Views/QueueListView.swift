@@ -34,39 +34,37 @@ struct QueueListView: View {
             VStack(spacing: 8) {
                 Image(systemName: "music.note.list")
                     .font(.title2)
-                    .foregroundStyle(accentColor.contrastingForeground)
+                    .foregroundStyle(accentColor.contrastingSecondary)
                 Text(emptyTitle)
                     .font(.headline)
-                    .foregroundStyle(accentColor.contrastingSecondary)
+                    .foregroundStyle(accentColor.contrastingForeground)
                 Text(emptyMessage)
                     .font(.caption)
-                    .foregroundStyle(accentColor.contrastingForeground)
+                    .foregroundStyle(accentColor.contrastingSecondary)
                     .multilineTextAlignment(.center)
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 32)
         } else {
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    ForEach(Array(tracks.enumerated()), id: \.element.id) { index, track in
-                        Button {
-                            onTrackTap(track)
-                        } label: {
-                            SongRow.queue(
-                                track: track,
-                                index: index + 1,
-                                playerService: playerService,
-                                accentColor: accentColor
-                            )
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 10)
-                        }
-                        .buttonStyle(.plain)
+            LazyVStack(spacing: 0) {
+                ForEach(Array(tracks.enumerated()), id: \.element.id) { index, track in
+                    Button {
+                        onTrackTap(track)
+                    } label: {
+                        SongRow.queue(
+                            track: track,
+                            index: index + 1,
+                            playerService: playerService,
+                            accentColor: accentColor
+                        )
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                    }
+                    .buttonStyle(.plain)
 
-                        if index < tracks.count - 1 {
-                            Divider()
-                                .padding(.leading, 52)
-                        }
+                    if index < tracks.count - 1 {
+                        Divider()
+                            .padding(.leading, 52)
                     }
                 }
             }
