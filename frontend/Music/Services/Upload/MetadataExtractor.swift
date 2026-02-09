@@ -12,7 +12,7 @@ import AVFoundation
 #if os(macOS)
 
 /// Extracted track metadata
-struct TrackMetadata: Codable {
+struct TrackMetadata: Codable, Sendable {
     var title: String
     var artist: String?
     var album: String?
@@ -34,9 +34,21 @@ struct TrackMetadata: Codable {
 }
 
 /// Cached metadata entry with modification date for invalidation
-struct CachedMetadataEntry: Codable {
+struct CachedMetadataEntry: Codable, Sendable {
     let metadata: TrackMetadata
     let modificationDate: Date
+}
+
+/// Snapshot of metadata cache for concurrent reads without actor hops.
+/// Used in scan phase task groups where 12k+ files would bottleneck on sequential actor access.
+struct MetadataCacheSnapshot: Sendable {
+    let entries: [String: CachedMetadataEntry]
+
+    func lookup(fileURL: URL) -> TrackMetadata? {
+        guard let entry = entries[fileURL.path] else { return nil }
+        guard let modDate = (try? FileManager.default.attributesOfItem(atPath: fileURL.path))?[.modificationDate] as? Date else { return nil }
+        return abs(entry.modificationDate.timeIntervalSince(modDate)) < 1.0 ? entry.metadata : nil
+    }
 }
 
 actor MetadataExtractor {
@@ -44,9 +56,15 @@ actor MetadataExtractor {
     private var cache: [String: CachedMetadataEntry] = [:]
     private static let cacheFileName = "metadata_cache.json"
 
+    /// Concurrent-safe snapshot of the cache at init time.
+    /// Allows task groups to perform cache lookups without actor hops.
+    nonisolated let cacheSnapshot: MetadataCacheSnapshot
+
     init(musicDirectory: URL) {
         self.musicDirectory = musicDirectory
-        self.cache = Self.loadCacheFromDisk()
+        let loaded = Self.loadCacheFromDisk()
+        self.cache = loaded
+        self.cacheSnapshot = MetadataCacheSnapshot(entries: loaded)
     }
 
     // MARK: - Cache Management
