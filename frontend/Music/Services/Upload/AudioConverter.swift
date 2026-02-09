@@ -15,10 +15,11 @@ import AudioToolbox
 struct AudioConverter {
     private static let supportedInputFormats = Set(["mp3", "m4a", "flac", "wav", "aac", "aiff"])
 
-    /// Check if a file needs conversion (not already m4a)
+    /// Check if a file needs conversion (lossless/uncompressed formats only)
     static func needsConversion(_ fileURL: URL) -> Bool {
         let ext = fileURL.pathExtension.lowercased()
-        return ext != "m4a" && supportedInputFormats.contains(ext)
+        let noConversionNeeded: Set<String> = ["m4a", "mp3", "aac"]
+        return !noConversionNeeded.contains(ext) && supportedInputFormats.contains(ext)
     }
 
     /// Convert audio file to M4A format.

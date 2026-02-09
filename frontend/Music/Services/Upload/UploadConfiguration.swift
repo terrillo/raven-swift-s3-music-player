@@ -57,6 +57,11 @@ struct UploadConfiguration: Codable, Equatable {
         "https://\(spacesBucket).\(spacesRegion).cdn.digitaloceanspaces.com/\(spacesPrefix)"
     }
 
+    /// CDN base URL without the prefix path (for iCloud storage and catalog fetch)
+    var cdnBaseURLWithoutPrefix: String {
+        "https://\(spacesBucket).\(spacesRegion).cdn.digitaloceanspaces.com"
+    }
+
     // MARK: - Keychain Storage
 
     private static let keychainService = "com.music.upload"

@@ -21,7 +21,8 @@ actor StorageService {
         "m4a": "audio/x-m4a",
         "flac": "audio/flac",
         "wav": "audio/wav",
-        "aac": "audio/aac"
+        "aac": "audio/aac",
+        "aiff": "audio/aiff"
     ]
 
     private static let maxImageSize = 10 * 1024 * 1024  // 10MB
@@ -146,12 +147,36 @@ actor StorageService {
 
     // MARK: - Upload File
 
-    /// Upload a file to Spaces with retry logic.
+    /// Upload a file to Spaces via streaming (never loads entire file into memory).
     func uploadFile(at path: URL, s3Key: String, contentType: String? = nil) async throws -> String {
-        let data = try Data(contentsOf: path)
-        let resolvedContentType = contentType ?? Self.audioContentTypes[path.pathExtension.lowercased()] ?? "application/octet-stream"
+        guard FileManager.default.fileExists(atPath: path.path) else {
+            throw StorageError.uploadFailed("File not found: \(path.path)")
+        }
 
-        return try await uploadData(data, s3Key: s3Key, contentType: resolvedContentType)
+        // Check if already uploaded
+        if await fileExists(s3Key) {
+            return getPublicURL(for: s3Key)
+        }
+
+        let resolvedContentType = contentType ?? Self.audioContentTypes[path.pathExtension.lowercased()] ?? "application/octet-stream"
+        let maxRetries = 3
+
+        for attempt in 0..<maxRetries {
+            do {
+                try await performStreamingUpload(fileURL: path, s3Key: s3Key, contentType: resolvedContentType)
+                existingKeysCache?.insert(s3Key)
+                return getPublicURL(for: s3Key)
+            } catch {
+                if attempt < maxRetries - 1 {
+                    let waitTime = pow(2.0, Double(attempt + 1))
+                    try await Task.sleep(for: .seconds(waitTime))
+                } else {
+                    throw error
+                }
+            }
+        }
+
+        throw StorageError.uploadFailed("Max retries exceeded")
     }
 
     /// Upload raw bytes to Spaces.
@@ -234,6 +259,38 @@ actor StorageService {
         signRequest(&request, method: "PUT", headers: headers, payloadHash: payloadHash)
 
         let (responseData, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw StorageError.invalidResponse
+        }
+
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            let errorMessage = String(data: responseData, encoding: .utf8)
+            throw StorageError.httpError(httpResponse.statusCode, errorMessage)
+        }
+    }
+
+    /// Stream a file from disk to S3 without loading into memory.
+    private func performStreamingUpload(fileURL: URL, s3Key: String, contentType: String) async throws {
+        let fullPath = "/\(prefixedKey(s3Key))"
+        guard let encodedPath = fullPath.addingPercentEncoding(withAllowedCharacters: .s3PathAllowed),
+              let url = URL(string: "\(config.spacesEndpoint)\(encodedPath)") else {
+            throw StorageError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue(contentType, forHTTPHeaderField: "Content-Type")
+        request.setValue("public-read", forHTTPHeaderField: "x-amz-acl")
+
+        // Content-Length is set automatically by URLSession.upload(for:fromFile:)
+        let headers = [
+            "Content-Type": contentType,
+            "x-amz-acl": "public-read"
+        ]
+        signRequest(&request, method: "PUT", headers: headers, payloadHash: AWSV4Signer.unsignedPayload)
+
+        let (responseData, response) = try await URLSession.shared.upload(for: request, fromFile: fileURL)
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw StorageError.invalidResponse
@@ -360,6 +417,7 @@ private struct AWSV4Signer {
     let service: String
 
     static let emptyPayloadHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    static let unsignedPayload = "UNSIGNED-PAYLOAD"
 
     func sign(
         _ request: inout URLRequest,

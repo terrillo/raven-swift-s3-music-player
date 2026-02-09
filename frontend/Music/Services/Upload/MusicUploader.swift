@@ -112,6 +112,22 @@ struct UploadProgress {
     }
 }
 
+/// Cache for local album art lookups to avoid re-scanning the same directory
+actor LocalArtworkCache {
+    private var cache: [String: String?] = [:]  // dir path -> uploaded URL or nil
+
+    func getCachedURL(for dirPath: String) -> (isCached: Bool, url: String?) {
+        if let result = cache[dirPath] {
+            return (true, result)
+        }
+        return (false, nil)
+    }
+
+    func cacheURL(_ url: String?, for dirPath: String) {
+        cache[dirPath] = url
+    }
+}
+
 @MainActor
 @Observable
 class MusicUploader {
@@ -132,6 +148,7 @@ class MusicUploader {
     private var uploadTask: Task<Void, Never>?
     private var config: UploadConfiguration?
     private var modelContext: ModelContext?
+    private var modelContainer: ModelContainer?
 
     private static let supportedExtensions = Set(["mp3", "m4a", "flac", "wav", "aac", "aiff"])
     private static let maxConcurrentWorkers = 16  // Network I/O bound, can handle more parallelism
@@ -141,42 +158,7 @@ class MusicUploader {
     func configure(config: UploadConfiguration, modelContext: ModelContext) {
         self.config = config
         self.modelContext = modelContext
-    }
-
-    // MARK: - Start Upload
-
-    func start(from folderURL: URL) {
-        guard !isRunning else { return }
-        guard let config = config, config.isValid else {
-            error = UploaderError.invalidConfiguration
-            return
-        }
-
-        isRunning = true
-        error = nil
-        progress = UploadProgress(
-            phase: .scanning,
-            totalFiles: 0,
-            processedFiles: 0,
-            skippedFiles: 0,
-            convertedFiles: 0,
-            failedFiles: 0,
-            currentFile: nil,
-            discoveredFiles: 0
-        )
-
-        uploadTask = Task {
-            do {
-                try await performUpload(from: folderURL, config: config)
-                progress.phase = .complete
-            } catch is CancellationError {
-                progress.phase = .cancelled
-            } catch {
-                self.error = error
-                progress.phase = .failed
-            }
-            isRunning = false
-        }
+        self.modelContainer = modelContext.container
     }
 
     // MARK: - Cancel
@@ -504,6 +486,7 @@ class MusicUploader {
         let metadataExtractor = MetadataExtractor(musicDirectory: folderURL)
         let artworkExtractor = ArtworkExtractor()
         let audioConverter = AudioConverter()
+        let localArtworkCache = LocalArtworkCache()
         let catalogBuilder = CatalogBuilder(
             theAudioDB: theAudioDB,
             musicBrainz: musicBrainz,
@@ -511,15 +494,6 @@ class MusicUploader {
             storageService: storageService,
             cdnBaseURL: config.cdnBaseURL
         )
-
-        // Build a lookup map from file path to preview item for quick access
-        var previewItemMap: [String: UploadPreviewItem] = [:]
-        for item in preview.newFiles {
-            previewItemMap[item.localPath] = item
-        }
-        for item in preview.skippedFiles {
-            previewItemMap[item.localPath] = item
-        }
 
         // Set existing keys cache (skipped files are already on remote)
         let existingKeys = Set(preview.skippedFiles.map { $0.s3Key })
@@ -570,6 +544,7 @@ class MusicUploader {
                         metadataExtractor: metadataExtractor,
                         artworkExtractor: artworkExtractor,
                         audioConverter: audioConverter,
+                        localArtworkCache: localArtworkCache,
                         existingAddedAtMap: existingAddedAtMap
                     )
                 }
@@ -592,9 +567,20 @@ class MusicUploader {
         processedTracks = results
 
         // Process skipped files in parallel (they're still part of the catalog)
-        // These files already exist on remote, just need metadata extraction
+        // These files already exist on remote, just need metadata extraction + local art check
         let skippedTracks = await withTaskGroup(of: ProcessedTrack?.self) { group in
+            var submitted = 0
+            var results: [ProcessedTrack] = []
+            results.reserveCapacity(preview.skippedFiles.count)
+
             for item in preview.skippedFiles {
+                // Limit concurrency (metadata extraction is I/O heavy)
+                if submitted >= Self.maxConcurrentMetadataExtractors {
+                    if let result = await group.next(), let track = result {
+                        results.append(track)
+                    }
+                }
+
                 group.addTask {
                     // Verify file still exists on remote (may have been deleted between scan and upload)
                     let exists = await storageService.fileExists(item.s3Key)
@@ -609,6 +595,29 @@ class MusicUploader {
                     // Preserve existing addedAt or use current date as fallback
                     let addedAt = existingAddedAtMap[item.s3Key] ?? Date()
 
+                    // Check for local album art (fast filesystem check, no embedded extraction)
+                    var embeddedArtworkUrl: String?
+                    let dirPath = item.fileURL.deletingLastPathComponent().path
+                    let cached = await localArtworkCache.getCachedURL(for: dirPath)
+                    if cached.isCached {
+                        embeddedArtworkUrl = cached.url
+                    } else if let localArt = artworkExtractor.extractFromDirectory(item.fileURL.deletingLastPathComponent()) {
+                        do {
+                            let uploadedUrl = try await storageService.uploadArtworkBytes(
+                                localArt.data,
+                                mimeType: localArt.mimeType,
+                                artist: item.artist,
+                                album: item.album
+                            )
+                            await localArtworkCache.cacheURL(uploadedUrl, for: dirPath)
+                            embeddedArtworkUrl = uploadedUrl
+                        } catch {
+                            await localArtworkCache.cacheURL(nil, for: dirPath)
+                        }
+                    } else {
+                        await localArtworkCache.cacheURL(nil, for: dirPath)
+                    }
+
                     return ProcessedTrack(
                         title: item.title,
                         artist: metadata.artist ?? item.artist,
@@ -621,17 +630,24 @@ class MusicUploader {
                         duration: metadata.duration,
                         year: metadata.year,
                         genre: metadata.genre,
+                        composer: metadata.composer,
+                        comment: metadata.comment,
+                        bitrate: metadata.bitrate,
+                        samplerate: metadata.samplerate,
+                        channels: metadata.channels,
+                        filesize: metadata.filesize,
                         format: item.format,
                         s3Key: item.s3Key,
                         url: url,
+                        embeddedArtworkUrl: embeddedArtworkUrl,
                         originalFormat: item.needsConversion ? item.fileURL.pathExtension.lowercased() : nil,
                         addedAt: addedAt
                     )
                 }
+                submitted += 1
             }
 
-            var results: [ProcessedTrack] = []
-            results.reserveCapacity(preview.skippedFiles.count)
+            // Collect remaining
             for await result in group {
                 if let track = result {
                     results.append(track)
@@ -672,6 +688,7 @@ class MusicUploader {
         metadataExtractor: MetadataExtractor,
         artworkExtractor: ArtworkExtractor,
         audioConverter: AudioConverter,
+        localArtworkCache: LocalArtworkCache,
         existingAddedAtMap: [String: Date]
     ) async -> ProcessedTrack? {
         let fileURL = previewItem.fileURL
@@ -691,6 +708,7 @@ class MusicUploader {
                     progress.convertedFiles += 1
                 }
             } catch {
+                print("❌ Conversion failed for \(previewItem.s3Key): \(error.localizedDescription)")
                 await MainActor.run {
                     progress.failedFiles += 1
                 }
@@ -709,7 +727,32 @@ class MusicUploader {
                     album: previewItem.album
                 )
             } catch {
-                // Artwork upload failed, continue without it
+                print("⚠️ Artwork upload failed for \(previewItem.s3Key): \(error.localizedDescription)")
+            }
+        }
+
+        // Fallback: local album art (cover.jpg, folder.png, etc.)
+        if embeddedArtworkUrl == nil {
+            let dirPath = fileURL.deletingLastPathComponent().path
+            let cached = await localArtworkCache.getCachedURL(for: dirPath)
+            if cached.isCached {
+                embeddedArtworkUrl = cached.url
+            } else if let localArt = artworkExtractor.extractFromDirectory(fileURL.deletingLastPathComponent()) {
+                do {
+                    let uploadedUrl = try await storageService.uploadArtworkBytes(
+                        localArt.data,
+                        mimeType: localArt.mimeType,
+                        artist: previewItem.artist,
+                        album: previewItem.album
+                    )
+                    await localArtworkCache.cacheURL(uploadedUrl, for: dirPath)
+                    embeddedArtworkUrl = uploadedUrl
+                } catch {
+                    print("⚠️ Local artwork upload failed for \(previewItem.s3Key): \(error.localizedDescription)")
+                    await localArtworkCache.cacheURL(nil, for: dirPath)
+                }
+            } else {
+                await localArtworkCache.cacheURL(nil, for: dirPath)
             }
         }
 
@@ -728,7 +771,7 @@ class MusicUploader {
             return ProcessedTrack(
                 title: previewItem.title,
                 artist: metadata.artist ?? previewItem.artist,
-                album: previewItem.album,  // Use corrected album name
+                album: previewItem.album,
                 albumArtist: metadata.albumArtist,
                 trackNumber: metadata.trackNumber,
                 trackTotal: metadata.trackTotal,
@@ -737,6 +780,12 @@ class MusicUploader {
                 duration: metadata.duration,
                 year: metadata.year,
                 genre: metadata.genre,
+                composer: metadata.composer,
+                comment: metadata.comment,
+                bitrate: metadata.bitrate,
+                samplerate: metadata.samplerate,
+                channels: metadata.channels,
+                filesize: metadata.filesize,
                 format: previewItem.format,
                 s3Key: s3Key,
                 url: url,
@@ -745,6 +794,8 @@ class MusicUploader {
                 addedAt: addedAt
             )
         } catch {
+            print("❌ Upload failed for \(previewItem.s3Key): \(error.localizedDescription)")
+
             // Clean up converted file on failure
             if wasConverted && uploadURL != fileURL {
                 try? FileManager.default.removeItem(at: uploadURL)
@@ -755,114 +806,6 @@ class MusicUploader {
             }
             return nil
         }
-    }
-
-    // MARK: - Upload Workflow
-
-    private func performUpload(from folderURL: URL, config: UploadConfiguration) async throws {
-        // Initialize services
-        let storageService = StorageService(config: config)
-        let theAudioDB = TheAudioDBService(storageService: storageService)
-        let musicBrainz = config.musicBrainzContact.isEmpty ? nil : MusicBrainzService(contact: config.musicBrainzContact)
-        let lastFM = config.lastFMApiKey.isEmpty ? nil : LastFMService(apiKey: config.lastFMApiKey, storageService: storageService)
-
-        let metadataExtractor = MetadataExtractor(musicDirectory: folderURL)
-        let artworkExtractor = ArtworkExtractor()
-        let audioConverter = AudioConverter()
-        let catalogBuilder = CatalogBuilder(
-            theAudioDB: theAudioDB,
-            musicBrainz: musicBrainz,
-            lastFM: lastFM,
-            storageService: storageService,
-            cdnBaseURL: config.cdnBaseURL
-        )
-
-        // Phase 1: Scan for audio files
-        progress.phase = .scanning
-        let audioFiles = try await scanForAudioFiles(in: folderURL)
-        progress.totalFiles = audioFiles.count
-
-        if audioFiles.isEmpty {
-            throw UploaderError.noAudioFilesFound
-        }
-
-        try Task.checkCancellation()
-
-        // Phase 2: Fetch existing files from storage
-        progress.phase = .fetchingExisting
-        let existingKeys = try await storageService.listAllFiles()
-        await storageService.setExistingKeysCache(existingKeys)
-
-        try Task.checkCancellation()
-
-        // Phase 3: Process files in parallel
-        progress.phase = .processing
-        var processedTracks: [ProcessedTrack] = []
-
-        // Use TaskGroup with limited concurrency
-        let results = try await withThrowingTaskGroup(of: ProcessedTrack?.self) { group in
-            var submitted = 0
-            var resultsArray: [ProcessedTrack] = []
-
-            for fileURL in audioFiles {
-                // Limit concurrent workers
-                if submitted >= Self.maxConcurrentWorkers {
-                    if let result = try await group.next() {
-                        if let track = result {
-                            resultsArray.append(track)
-                        }
-                    }
-                }
-
-                try Task.checkCancellation()
-
-                group.addTask {
-                    return await self.processFile(
-                        fileURL: fileURL,
-                        musicDirectory: folderURL,
-                        existingKeys: existingKeys,
-                        config: config,
-                        storageService: storageService,
-                        metadataExtractor: metadataExtractor,
-                        artworkExtractor: artworkExtractor,
-                        audioConverter: audioConverter
-                    )
-                }
-                submitted += 1
-            }
-
-            // Collect remaining results
-            for try await result in group {
-                if let track = result {
-                    resultsArray.append(track)
-                }
-            }
-
-            return resultsArray
-        }
-
-        processedTracks = results
-
-        try Task.checkCancellation()
-
-        // Phase 4: Build catalog
-        progress.phase = .buildingCatalog
-        let (catalogArtists, totalTracks) = await catalogBuilder.build(from: processedTracks)
-
-        // Save external API caches for future scans
-        await theAudioDB.saveCache()
-        if let mb = musicBrainz {
-            await mb.saveCache()
-        }
-        if let lfm = lastFM {
-            await lfm.saveCache()
-        }
-
-        try Task.checkCancellation()
-
-        // Phase 5: Save to SwiftData and upload catalog.json to CDN
-        progress.phase = .savingCatalog
-        try await saveCatalog(artists: catalogArtists, totalTracks: totalTracks, storageService: storageService, config: config)
     }
 
     // MARK: - Scan for Audio Files
@@ -914,157 +857,12 @@ class MusicUploader {
         return audioFiles
     }
 
-    // MARK: - Process Single File
-
-    private func processFile(
-        fileURL: URL,
-        musicDirectory: URL,
-        existingKeys: Set<String>,
-        config: UploadConfiguration,
-        storageService: StorageService,
-        metadataExtractor: MetadataExtractor,
-        artworkExtractor: ArtworkExtractor,
-        audioConverter: AudioConverter
-    ) async -> ProcessedTrack? {
-        // Extract metadata
-        let metadata = await metadataExtractor.extract(from: fileURL)
-
-        let artist = metadata.albumArtist ?? metadata.artist ?? "Unknown Artist"
-        let album = metadata.album ?? "Unknown Album"
-        let title = metadata.title
-
-        // Generate S3 key
-        let format = AudioConverter.needsConversion(fileURL) ? "m4a" : fileURL.pathExtension.lowercased()
-        let s3Key = Identifiers.generateS3Key(artist: artist, album: album, title: title, format: format)
-
-        // Update progress on main thread
-        await MainActor.run {
-            progress.currentFile = fileURL.lastPathComponent
-        }
-
-        // Check if already uploaded
-        if existingKeys.contains(s3Key) {
-            await MainActor.run {
-                progress.skippedFiles += 1
-            }
-            // Return track info even for skipped files (they're still part of catalog)
-            let url = await storageService.getPublicURL(for: s3Key)
-            return ProcessedTrack(
-                title: title,
-                artist: metadata.artist ?? artist,
-                album: album,
-                albumArtist: metadata.albumArtist,
-                trackNumber: metadata.trackNumber,
-                trackTotal: metadata.trackTotal,
-                discNumber: metadata.discNumber,
-                discTotal: metadata.discTotal,
-                duration: metadata.duration,
-                year: metadata.year,
-                genre: metadata.genre,
-                composer: metadata.composer,
-                comment: metadata.comment,
-                bitrate: metadata.bitrate,
-                samplerate: metadata.samplerate,
-                channels: metadata.channels,
-                filesize: metadata.filesize,
-                format: format,
-                s3Key: s3Key,
-                url: url,
-                originalFormat: fileURL.pathExtension.lowercased() != format ? fileURL.pathExtension.lowercased() : nil
-            )
-        }
-
-        // Convert if needed
-        var uploadURL = fileURL
-        var wasConverted = false
-        if AudioConverter.needsConversion(fileURL) {
-            do {
-                uploadURL = try await audioConverter.convert(fileURL)
-                wasConverted = true
-                await MainActor.run {
-                    progress.convertedFiles += 1
-                }
-            } catch {
-                await MainActor.run {
-                    progress.failedFiles += 1
-                }
-                return nil
-            }
-        }
-
-        // Extract embedded artwork
-        var embeddedArtworkUrl: String?
-        if let artwork = await artworkExtractor.extract(from: fileURL) {
-            do {
-                embeddedArtworkUrl = try await storageService.uploadArtworkBytes(
-                    artwork.data,
-                    mimeType: artwork.mimeType,
-                    artist: artist,
-                    album: album
-                )
-            } catch {
-                // Artwork upload failed, continue without it
-            }
-        }
-
-        // Upload file
-        do {
-            let url = try await storageService.uploadFile(at: uploadURL, s3Key: s3Key)
-
-            // Clean up converted file
-            if wasConverted && uploadURL != fileURL {
-                try? FileManager.default.removeItem(at: uploadURL)
-            }
-
-            await MainActor.run {
-                progress.processedFiles += 1
-            }
-
-            return ProcessedTrack(
-                title: title,
-                artist: metadata.artist ?? artist,
-                album: album,
-                albumArtist: metadata.albumArtist,
-                trackNumber: metadata.trackNumber,
-                trackTotal: metadata.trackTotal,
-                discNumber: metadata.discNumber,
-                discTotal: metadata.discTotal,
-                duration: metadata.duration,
-                year: metadata.year,
-                genre: metadata.genre,
-                composer: metadata.composer,
-                comment: metadata.comment,
-                bitrate: metadata.bitrate,
-                samplerate: metadata.samplerate,
-                channels: metadata.channels,
-                filesize: metadata.filesize,
-                format: format,
-                s3Key: s3Key,
-                url: url,
-                embeddedArtworkUrl: embeddedArtworkUrl,
-                originalFormat: wasConverted ? fileURL.pathExtension.lowercased() : nil
-            )
-        } catch {
-            // Clean up converted file on failure
-            if wasConverted && uploadURL != fileURL {
-                try? FileManager.default.removeItem(at: uploadURL)
-            }
-
-            await MainActor.run {
-                progress.failedFiles += 1
-            }
-            return nil
-        }
-    }
-
     // MARK: - Fetch Existing AddedAt Map
 
     /// Fetches the existing catalog.json from CDN and builds a lookup map of s3Key -> addedAt
     /// Used to preserve addedAt dates for existing tracks during catalog rebuild
     private func fetchExistingAddedAtMap(config: UploadConfiguration) async -> [String: Date] {
-        let base = config.cdnBaseURL.replacingOccurrences(of: "/\(config.spacesPrefix)", with: "")
-        let prefix = config.spacesPrefix
-        guard let url = URL(string: "\(base)/\(prefix)/catalog.json") else {
+        guard let url = URL(string: "\(config.cdnBaseURLWithoutPrefix)/\(config.spacesPrefix)/catalog.json") else {
             return [:]
         }
 
@@ -1103,28 +901,11 @@ class MusicUploader {
     // MARK: - Save Catalog to SwiftData and CDN
 
     private func saveCatalog(artists: [CatalogArtist], totalTracks: Int, storageService: StorageService, config: UploadConfiguration) async throws {
-        guard let modelContext = modelContext else {
+        guard let modelContainer = modelContainer else {
             throw UploaderError.noModelContext
         }
 
-        // Delete existing catalog data
-        try modelContext.delete(model: CatalogTrack.self)
-        try modelContext.delete(model: CatalogAlbum.self)
-        try modelContext.delete(model: CatalogArtist.self)
-        try modelContext.delete(model: CatalogMetadata.self)
-
-        // Insert new data
-        for artist in artists {
-            modelContext.insert(artist)
-        }
-
-        // Save metadata
-        let metadata = CatalogMetadata(totalTracks: totalTracks)
-        modelContext.insert(metadata)
-
-        try modelContext.save()
-
-        // Upload catalog.json to CDN for cross-device sync
+        // Convert to codable DTOs first (SwiftData models can't cross context boundaries)
         let codableArtists = artists.map { $0.toArtist() }
         let catalog = MusicCatalog(
             artists: codableArtists,
@@ -1132,8 +913,101 @@ class MusicUploader {
             generatedAt: Date().ISO8601Format()
         )
 
+        // Save to SwiftData on background context (matches MusicService.saveCatalogToSwiftData pattern)
+        try await Task.detached {
+            let bgContext = ModelContext(modelContainer)
+            bgContext.autosaveEnabled = false
+
+            try bgContext.delete(model: CatalogTrack.self)
+            try bgContext.delete(model: CatalogAlbum.self)
+            try bgContext.delete(model: CatalogArtist.self)
+            try bgContext.delete(model: CatalogMetadata.self)
+
+            // Re-create models inside the background context from codable DTOs
+            for artist in catalog.artists {
+                let catalogArtist = CatalogArtist(
+                    id: artist.id,
+                    name: artist.name,
+                    bio: artist.bio,
+                    imageUrl: artist.imageUrl,
+                    genre: artist.genre,
+                    style: artist.style,
+                    mood: artist.mood,
+                    artistType: artist.artistType,
+                    area: artist.area,
+                    beginDate: artist.beginDate,
+                    endDate: artist.endDate,
+                    disambiguation: artist.disambiguation
+                )
+
+                for album in artist.albums {
+                    let catalogAlbum = CatalogAlbum(
+                        id: album.id,
+                        name: album.name,
+                        imageUrl: album.imageUrl,
+                        wiki: album.wiki,
+                        releaseDate: album.releaseDate,
+                        genre: album.genre,
+                        style: album.style,
+                        mood: album.mood,
+                        theme: album.theme,
+                        releaseType: album.releaseType,
+                        country: album.country,
+                        label: album.label,
+                        barcode: album.barcode,
+                        mediaFormat: album.mediaFormat
+                    )
+                    catalogAlbum.artist = catalogArtist
+                    if catalogArtist.albums == nil { catalogArtist.albums = [] }
+                    catalogArtist.albums?.append(catalogAlbum)
+
+                    for track in album.tracks {
+                        let catalogTrack = CatalogTrack(
+                            s3Key: track.s3Key,
+                            title: track.title,
+                            artistName: track.artist,
+                            albumName: track.album,
+                            trackNumber: track.trackNumber,
+                            duration: track.duration,
+                            format: track.format,
+                            url: track.url,
+                            embeddedArtworkUrl: track.embeddedArtworkUrl,
+                            genre: track.genre,
+                            style: track.style,
+                            mood: track.mood,
+                            theme: track.theme,
+                            albumArtist: track.albumArtist,
+                            trackTotal: track.trackTotal,
+                            discNumber: track.discNumber,
+                            discTotal: track.discTotal,
+                            year: track.year,
+                            composer: track.composer,
+                            comment: track.comment,
+                            bitrate: track.bitrate,
+                            samplerate: track.samplerate,
+                            channels: track.channels,
+                            filesize: track.filesize,
+                            originalFormat: track.originalFormat,
+                            addedAt: track.addedAt
+                        )
+                        catalogTrack.catalogAlbum = catalogAlbum
+                        if catalogAlbum.tracks == nil { catalogAlbum.tracks = [] }
+                        catalogAlbum.tracks?.append(catalogTrack)
+                    }
+                }
+
+                bgContext.insert(catalogArtist)
+            }
+
+            let metadata = CatalogMetadata(totalTracks: catalog.totalTracks)
+            bgContext.insert(metadata)
+
+            try bgContext.save()
+        }.value
+
+        // Upload catalog.json to CDN for cross-device sync
         let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]  // No pretty printing for smaller size
+        encoder.outputFormatting = [.sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
         let catalogData = try encoder.encode(catalog)
 
@@ -1146,7 +1020,7 @@ class MusicUploader {
 
         // Save CDN settings to iCloud for iOS to discover
         let store = NSUbiquitousKeyValueStore.default
-        store.set(config.cdnBaseURL.replacingOccurrences(of: "/\(config.spacesPrefix)", with: ""), forKey: "cdnBaseURL")
+        store.set(config.cdnBaseURLWithoutPrefix, forKey: "cdnBaseURL")
         store.set(config.spacesPrefix, forKey: "cdnPrefix")
         store.synchronize()
         print("✅ Saved CDN settings to iCloud (prefix: \(config.spacesPrefix))")

@@ -19,6 +19,30 @@ struct ExtractedArtwork {
 
 struct ArtworkExtractor {
 
+    /// Standard filenames for local album art (checked in order)
+    private static let localArtworkFilenames = [
+        "cover.jpg", "cover.png", "folder.jpg", "folder.png",
+        "album.jpg", "album.png", "front.jpg", "front.png",
+        "artwork.jpg", "artwork.png"
+    ]
+
+    private static let maxLocalArtworkSize = 10 * 1024 * 1024  // 10MB
+
+    /// Extract local album art from a directory (cover.jpg, folder.png, etc.)
+    /// Returns ExtractedArtwork on success, nil if no artwork found.
+    func extractFromDirectory(_ directoryURL: URL) -> ExtractedArtwork? {
+        let fm = FileManager.default
+        for filename in Self.localArtworkFilenames {
+            let fileURL = directoryURL.appendingPathComponent(filename)
+            guard fm.fileExists(atPath: fileURL.path) else { continue }
+            guard let data = try? Data(contentsOf: fileURL),
+                  data.count <= Self.maxLocalArtworkSize else { continue }
+            let mimeType = determineMimeType(from: data)
+            return ExtractedArtwork(data: data, mimeType: mimeType)
+        }
+        return nil
+    }
+
     /// Extract embedded artwork from an audio file.
     /// Returns ExtractedArtwork on success, nil if no artwork found.
     func extract(from fileURL: URL) async -> ExtractedArtwork? {
