@@ -5,7 +5,7 @@
 A unified Swift music app for iOS and macOS with native upload capabilities. Host your own music library on S3-compatible storage and enjoy seamless offline playback across all your Apple devices.
 
 ![Platform](https://img.shields.io/badge/platform-iOS%20%7C%20macOS-blue)
-![Swift](https://img.shields.io/badge/Swift-5.9+-orange)
+![Swift](https://img.shields.io/badge/Swift-6.0+-orange)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 
 ## Features
@@ -36,8 +36,7 @@ Intelligent shuffle that learns your listening habits:
 - **Albums View**: Browse all albums with grid or list layout toggle
 - **Songs View**: Full track listing with cache status indicators
 - **Genres View**: Browse by genre with drill-down to matching tracks
-- **Radio Mode**: Start radio from track, genre, mood, or favorite artists
-- **Auto-Playlists**: Top 100 tracks by play count, Recently Added
+- **Radio Mode**: Start radio from track, genre, mood, or favorite artists — 3-layer scoring: local metadata matching, play history affinity, Last.fm similar artists
 - Artist detail pages with bio, albums, and track listings
 - Album detail pages with artwork, track listing, and metadata
 
@@ -61,6 +60,17 @@ Intelligent shuffle that learns your listening habits:
 - Top Artists chart with play counts
 - Top Genres chart with listening breakdown
 - Time period filters: week, month, all time
+
+### Favorites
+- Favorite artists, albums, and individual tracks
+- CloudKit sync across devices
+- Favorites playlist in Playlists tab
+
+### Playlists
+- Manual playlist creation with custom names
+- Add/remove tracks, reorder
+- Playlist recommendations via Last.fm similar artists and play history affinity
+- Auto-playlists: Favorites, Top 100, Recently Added
 
 ### Cross-Device Sync
 - Upload music on macOS and it becomes available on iOS within seconds
@@ -172,17 +182,31 @@ xcodebuild -project frontend/Music.xcodeproj -scheme Music \
 Music/
 ├── frontend/
 │   └── Music/
+│       ├── MusicApp.swift                        # App entry with SwiftData container
+│       ├── ContentView.swift                     # TabView (iOS) / NavigationSplitView (macOS)
+│       ├── MusicDB.xcdatamodeld/                 # Core Data schema (analytics, favorites, playlists)
 │       ├── Models/
-│       │   ├── CatalogModels.swift       # SwiftData: CatalogArtist, CatalogAlbum, CatalogTrack
-│       │   ├── MusicCatalog.swift        # Codable DTOs for JSON
-│       │   └── CacheModels.swift         # SwiftData: CachedTrack, CachedArtwork
+│       │   ├── CatalogModels.swift               # SwiftData: CatalogArtist, CatalogAlbum, CatalogTrack
+│       │   ├── MusicCatalog.swift                # Codable DTOs for JSON
+│       │   ├── CacheModels.swift                 # SwiftData: CachedTrack, CachedArtwork
+│       │   ├── NavigationDestination.swift
+│       │   ├── PlaybackState.swift
+│       │   └── ViewMode.swift
 │       ├── Services/
-│       │   ├── MusicService.swift        # Catalog loading and CDN fetch
-│       │   ├── PlayerService.swift       # AVPlayer and Now Playing
-│       │   ├── CacheService.swift        # Track/artwork downloading
-│       │   ├── ShuffleService.swift      # Weighted random selection
-│       │   ├── AnalyticsStore.swift      # Core Data + CloudKit analytics
-│       │   └── Upload/                   # macOS-only upload services
+│       │   ├── MusicService.swift                # Catalog loading and CDN fetch
+│       │   ├── PlayerService.swift               # AVPlayer and Now Playing
+│       │   ├── CacheService.swift                # Track/artwork downloading
+│       │   ├── ShuffleService.swift              # Weighted random selection
+│       │   ├── AnalyticsStore.swift              # Core Data + CloudKit analytics
+│       │   ├── FavoritesStore.swift              # Favorites management with CloudKit
+│       │   ├── StatisticsService.swift           # Listening statistics computation
+│       │   ├── PlaylistStore.swift               # Manual playlist CRUD
+│       │   ├── RadioService.swift                # Radio mode seed scoring
+│       │   ├── AffinityService.swift             # Play history affinity scoring
+│       │   ├── PlaylistRecommendationService.swift  # Playlist track suggestions
+│       │   ├── LastFMSimilarService.swift        # Last.fm similar artist lookups
+│       │   ├── CloudSettingsService.swift        # iCloud Key-Value sync
+│       │   └── Upload/                           # macOS-only upload services
 │       │       ├── MusicUploader.swift           # Main orchestrator
 │       │       ├── UploadConfiguration.swift     # Keychain storage
 │       │       ├── StorageService.swift          # S3 client
@@ -190,22 +214,61 @@ Music/
 │       │       ├── ArtworkExtractor.swift        # Embedded artwork
 │       │       ├── AudioConverter.swift          # ffmpeg conversion
 │       │       ├── CatalogBuilder.swift          # JSON generation
+│       │       ├── Identifiers.swift             # S3 key sanitization
 │       │       ├── MusicBrainzService.swift      # MBID lookups
 │       │       ├── TheAudioDBService.swift       # Artist/album metadata
 │       │       └── LastFMService.swift           # Fallback metadata
-│       └── Views/
-│           ├── ContentView.swift                 # TabView / NavigationSplitView
-│           ├── HomeView.swift                    # iOS home screen (curated sections)
-│           ├── ArtistsView.swift
-│           ├── AlbumsView.swift
-│           ├── SongsView.swift
-│           ├── RadioView.swift                   # Radio mode
-│           ├── NowPlayingSheet.swift
-│           ├── SettingsView.swift
-│           └── UploadView.swift                  # macOS-only
+│       ├── Views/
+│       │   ├── HomeView.swift                    # iOS home screen (curated sections)
+│       │   ├── ArtistsView.swift
+│       │   ├── AlbumsView.swift
+│       │   ├── SongsView.swift
+│       │   ├── GenreView.swift                   # Genre browsing
+│       │   ├── SearchView.swift                  # Global search
+│       │   ├── PlaylistView.swift                # Auto-generated playlists
+│       │   ├── ManualPlaylistsListView.swift     # User-created playlists list
+│       │   ├── PlaylistDetailView.swift          # Single playlist view
+│       │   ├── CreatePlaylistSheet.swift         # New playlist creation
+│       │   ├── EditPlaylistSheet.swift           # Playlist editing
+│       │   ├── AddTracksSheet.swift              # Add tracks to playlist
+│       │   ├── PlaylistRecommendationsSheet.swift  # AI-suggested tracks
+│       │   ├── RadioView.swift                   # Radio mode
+│       │   ├── NowPlayingSheet.swift             # Full-screen player
+│       │   ├── NowPlayingAccessory.swift         # iOS 18 tab bar mini-player
+│       │   ├── NowPlayingDetailView.swift        # Expanded Now Playing info
+│       │   ├── SidebarNowPlaying.swift           # macOS sidebar player
+│       │   ├── QueueListView.swift               # Queue display
+│       │   ├── CacheDownloadView.swift           # Download progress
+│       │   ├── CatalogLoadingView.swift          # Catalog loading state
+│       │   ├── StatisticsView.swift              # Play statistics
+│       │   ├── SettingsView.swift
+│       │   ├── UploadView.swift                  # macOS-only
+│       │   └── Components/
+│       │       ├── SongRow.swift                 # Reusable track row
+│       │       ├── PlaylistHeaderView.swift      # Playlist header
+│       │       └── PlaylistRowView.swift         # Playlist list row
+│       └── Extensions/
+│           ├── Color+AppAccent.swift
+│           └── Image+DominantColor.swift
+├── docs/
+│   └── icloud-setup.md
 ├── screenshots/
 └── CLAUDE.md
 ```
+
+### Core Data Entities
+
+The `MusicDB.xcdatamodeld` schema (synced via CloudKit) defines:
+
+| Entity | Purpose |
+|--------|---------|
+| `PlayEventEntity` | Records each track play with completion rate and timestamp |
+| `SkipEventEntity` | Records skips with played duration |
+| `FavoriteArtistEntity` | Favorited artists |
+| `FavoriteAlbumEntity` | Favorited albums |
+| `FavoriteTrackEntity` | Favorited tracks |
+| `PlaylistEntity` | User-created playlists |
+| `PlaylistTrackEntity` | Tracks within a playlist (ordered) |
 
 ## API Integrations
 
@@ -231,12 +294,24 @@ The macOS app generates a `catalog.json` file with this structure:
       "genre": "Alternative Rock",
       "style": "Rock/Pop",
       "mood": "Happy",
+      "artist_type": "Group",
+      "area": "United States",
+      "begin_date": "1990-01-15",
+      "end_date": null,
+      "disambiguation": "American rock band",
       "albums": [
         {
           "name": "Album Name",
           "image_url": "https://cdn.example.com/album.jpg",
+          "wiki": "Album description...",
           "release_date": 2020,
           "genre": "Pop-Rock",
+          "style": "Rock/Pop",
+          "mood": "Relaxed",
+          "theme": "In Love",
+          "release_type": "Album",
+          "country": "US",
+          "label": "Record Label",
           "tracks": [
             {
               "title": "Track Title",
@@ -246,9 +321,12 @@ The macOS app generates a `catalog.json` file with this structure:
               "duration": 245,
               "format": "m4a",
               "url": "https://cdn.example.com/music/Artist/Album/Track.m4a",
+              "embedded_artwork_url": "https://cdn.example.com/music/Artist/Album/Track.m4a.jpg",
               "s3_key": "Artist/Album/Track.m4a",
               "genre": "Pop-Rock",
-              "mood": "Relaxed"
+              "style": "Rock/Pop",
+              "mood": "Relaxed",
+              "theme": "In Love"
             }
           ]
         }

@@ -104,13 +104,13 @@ struct MusicCatalog, Artist, Album, Track  // For JSON serialization
 
 ### Services
 
-**MusicService** - Loads catalog from SwiftData, fetches from CDN if local database is empty. Syncs iCloud Key-Value settings on each load to discover CDN configuration set by macOS uploader.
+**MusicService** - Loads catalog from SwiftData, fetches from CDN if local database is empty. Syncs iCloud Key-Value settings on each load to discover CDN configuration set by macOS uploader. SwiftData persistence runs on a background `ModelContext` via `Task.detached` to avoid blocking UI during catalog refresh.
 
 **PlayerService** - AVPlayer-based playback with system Now Playing integration, queue management, and session tracking for smart shuffle.
 
-**CacheService** - Downloads tracks and artwork to `~/Documents/MusicCache/`, tracks downloads via SwiftData.
+**CacheService** - Downloads tracks and artwork to `~/Documents/MusicCache/`, tracks downloads via SwiftData. Uses a two-phase init: fast DB-only key load (synchronous) + deferred background file validation with backup exclusion updates via `Task.detached`.
 
-**ShuffleService** - Weighted random selection with 9 intelligence factors:
+**ShuffleService** - Weighted random selection with 9 intelligence factors and a 30-second TTL analytics cache to avoid repeated Core Data fetches on rapid skips. Supports `preWarmAnalytics()` for background pre-fetching when shuffle starts:
 1. Base weight by play count
 2. Skip penalty (exponential decay)
 3. Artist diversity (avoids clustering)
@@ -121,7 +121,11 @@ struct MusicCatalog, Artist, Album, Track  // For JSON serialization
 8. Mood continuity (30% boost)
 9. Time-of-day preferences (20% boost)
 
-**AnalyticsStore** - Core Data + CloudKit for play counts, skip tracking, completion rates, and time preferences.
+**AnalyticsStore** - Core Data + CloudKit for play counts, skip tracking, completion rates, and time preferences. `recordPlay`/`recordSkip` persist on background contexts via `Task.detached`. Provides `fetchAllAnalyticsInBackground()` (`nonisolated`) for off-main-thread batch fetches.
+
+**FavoritesStore** - Favorites management with optimistic UI updates. Toggle methods mutate in-memory Sets immediately, then persist via background Core Data contexts. On persist failure, a rollback closure reverts the optimistic state.
+
+**StatisticsService** - Music statistics with async `computeStats()` that runs all Core Data fetches and aggregation on a background context via `Task.detached`.
 
 ### Upload Services (macOS Only)
 
@@ -164,6 +168,17 @@ The `Services/Upload/` directory contains the complete upload pipeline:
 - Tab bar uses `.tabViewBottomAccessory` for Now Playing (iOS 18+)
 - iOS 26 Liquid Glass: `.glassEffect(.regular.interactive())` with `.ultraThinMaterial` fallback
 - macOS sidebar uses `.safeAreaInset(edge: .bottom)` for Now Playing
+
+### Background Threading Patterns
+
+All services use `@MainActor @Observable` for SwiftUI compatibility. Heavy work is moved off the main thread using these patterns:
+
+- **Optimistic UI** (`FavoritesStore`): Mutate in-memory state immediately, persist in `Task.detached` with `container.newBackgroundContext()`. Rollback closure reverts state on persist failure.
+- **Background Core Data** (`AnalyticsStore`, `FavoritesStore`): `container.newBackgroundContext()` + `bgContext.perform {}` inside `Task.detached` for writes and batch reads.
+- **Background SwiftData** (`MusicService`): `ModelContext(modelContainer)` in `Task.detached` with `autosaveEnabled = false` and explicit `save()`.
+- **Deferred validation** (`CacheService`): Split init into fast DB-only key load (synchronous) + background file I/O validation. Uses `subtract()` (not replace) when removing stale keys to avoid overwriting keys added by concurrent downloads.
+- **Analytics caching** (`ShuffleService`): 30-second TTL cache for `AnalyticsBatch` so rapid skips reuse cached data. `preWarmAnalytics()` pre-fetches in background.
+- **Backup exclusion** (`CacheService`): `updateTrackBackupExclusion()` / `updateArtworkBackupExclusion()` collect filenames on MainActor, then run `setResourceValues()` in `Task.detached`.
 
 ### iOS Tab Structure
 
@@ -298,8 +313,8 @@ Cached files use dynamic `isExcludedFromBackup` based on user settings:
 | `autoImageCachingEnabled` | `false` | Artwork: excluded from backups + cache cleared |
 
 - `CacheService.shouldPersistTracks` / `shouldPersistArtwork` compute the backup flag
-- `updateTrackBackupExclusion()` / `updateArtworkBackupExclusion()` bulk-update existing files
-- Both are called in `loadCachedKeys()` on every app launch for consistency
+- `updateTrackBackupExclusion()` / `updateArtworkBackupExclusion()` collect filenames on MainActor, then bulk-update `setResourceValues()` in `Task.detached`
+- Both run during background file validation on every app launch for consistency
 - `SettingsView` has `.onChange` handlers that trigger updates (or clear artwork cache) when settings change
 
 ## CDN URL
