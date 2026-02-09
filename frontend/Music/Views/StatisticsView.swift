@@ -105,7 +105,7 @@ struct StatisticsView: View {
         let songs = musicService.songs
         let period = selectedPeriod
 
-        let computed = StatisticsService.computeStats(for: period, songs: songs)
+        let computed = await StatisticsService.computeStats(for: period, songs: songs)
         stats = computed
         isLoading = false
     }

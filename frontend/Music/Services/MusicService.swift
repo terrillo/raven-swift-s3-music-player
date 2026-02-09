@@ -27,6 +27,7 @@ class MusicService {
     private(set) var lastUpdated: Date?
 
     private var modelContext: ModelContext?
+    private var modelContainer: ModelContainer?
     private var loadCatalogTask: Task<Void, Never>?
 
     // CDN settings (synced via iCloud Key-Value storage)
@@ -153,6 +154,7 @@ class MusicService {
 
     func configure(modelContext: ModelContext) {
         self.modelContext = modelContext
+        self.modelContainer = modelContext.container
     }
 
     func invalidateCaches() {
@@ -290,97 +292,105 @@ class MusicService {
         }
     }
 
-    /// Save fetched catalog to SwiftData for offline access
+    /// Save fetched catalog to SwiftData for offline access (runs on background ModelContext)
     private func saveCatalogToSwiftData(_ remoteCatalog: MusicCatalog) async {
-        guard let modelContext else { return }
+        guard let modelContainer else { return }
 
-        // Delete existing catalog data
-        try? modelContext.delete(model: CatalogTrack.self)
-        try? modelContext.delete(model: CatalogAlbum.self)
-        try? modelContext.delete(model: CatalogArtist.self)
-        try? modelContext.delete(model: CatalogMetadata.self)
+        // Capture catalog data for background work
+        let catalogData = remoteCatalog
 
-        // Convert and insert artists
-        for artist in remoteCatalog.artists {
-            let catalogArtist = CatalogArtist(
-                id: artist.id,
-                name: artist.name,
-                bio: artist.bio,
-                imageUrl: artist.imageUrl,
-                genre: artist.genre,
-                style: artist.style,
-                mood: artist.mood,
-                artistType: artist.artistType,
-                area: artist.area,
-                beginDate: artist.beginDate,
-                endDate: artist.endDate,
-                disambiguation: artist.disambiguation
-            )
+        Task.detached {
+            let bgContext = ModelContext(modelContainer)
+            bgContext.autosaveEnabled = false
 
-            for album in artist.albums {
-                let catalogAlbum = CatalogAlbum(
-                    id: album.id,
-                    name: album.name,
-                    imageUrl: album.imageUrl,
-                    wiki: album.wiki,
-                    releaseDate: album.releaseDate,
-                    genre: album.genre,
-                    style: album.style,
-                    mood: album.mood,
-                    theme: album.theme,
-                    releaseType: album.releaseType,
-                    country: album.country,
-                    label: album.label,
-                    barcode: album.barcode,
-                    mediaFormat: album.mediaFormat
+            // Delete existing catalog data
+            try? bgContext.delete(model: CatalogTrack.self)
+            try? bgContext.delete(model: CatalogAlbum.self)
+            try? bgContext.delete(model: CatalogArtist.self)
+            try? bgContext.delete(model: CatalogMetadata.self)
+
+            // Convert and insert artists
+            for artist in catalogData.artists {
+                let catalogArtist = CatalogArtist(
+                    id: artist.id,
+                    name: artist.name,
+                    bio: artist.bio,
+                    imageUrl: artist.imageUrl,
+                    genre: artist.genre,
+                    style: artist.style,
+                    mood: artist.mood,
+                    artistType: artist.artistType,
+                    area: artist.area,
+                    beginDate: artist.beginDate,
+                    endDate: artist.endDate,
+                    disambiguation: artist.disambiguation
                 )
-                catalogAlbum.artist = catalogArtist
-                if catalogArtist.albums == nil { catalogArtist.albums = [] }
-                catalogArtist.albums?.append(catalogAlbum)
 
-                for track in album.tracks {
-                    let catalogTrack = CatalogTrack(
-                        s3Key: track.s3Key,
-                        title: track.title,
-                        artistName: track.artist,
-                        albumName: track.album,
-                        trackNumber: track.trackNumber,
-                        duration: track.duration,
-                        format: track.format,
-                        url: track.url,
-                        embeddedArtworkUrl: track.embeddedArtworkUrl,
-                        genre: track.genre,
-                        style: track.style,
-                        mood: track.mood,
-                        theme: track.theme,
-                        albumArtist: track.albumArtist,
-                        trackTotal: track.trackTotal,
-                        discNumber: track.discNumber,
-                        discTotal: track.discTotal,
-                        year: track.year,
-                        composer: track.composer,
-                        comment: track.comment,
-                        bitrate: track.bitrate,
-                        samplerate: track.samplerate,
-                        channels: track.channels,
-                        filesize: track.filesize,
-                        originalFormat: track.originalFormat,
-                        addedAt: track.addedAt
+                for album in artist.albums {
+                    let catalogAlbum = CatalogAlbum(
+                        id: album.id,
+                        name: album.name,
+                        imageUrl: album.imageUrl,
+                        wiki: album.wiki,
+                        releaseDate: album.releaseDate,
+                        genre: album.genre,
+                        style: album.style,
+                        mood: album.mood,
+                        theme: album.theme,
+                        releaseType: album.releaseType,
+                        country: album.country,
+                        label: album.label,
+                        barcode: album.barcode,
+                        mediaFormat: album.mediaFormat
                     )
-                    catalogTrack.catalogAlbum = catalogAlbum
-                    if catalogAlbum.tracks == nil { catalogAlbum.tracks = [] }
-                    catalogAlbum.tracks?.append(catalogTrack)
+                    catalogAlbum.artist = catalogArtist
+                    if catalogArtist.albums == nil { catalogArtist.albums = [] }
+                    catalogArtist.albums?.append(catalogAlbum)
+
+                    for track in album.tracks {
+                        let catalogTrack = CatalogTrack(
+                            s3Key: track.s3Key,
+                            title: track.title,
+                            artistName: track.artist,
+                            albumName: track.album,
+                            trackNumber: track.trackNumber,
+                            duration: track.duration,
+                            format: track.format,
+                            url: track.url,
+                            embeddedArtworkUrl: track.embeddedArtworkUrl,
+                            genre: track.genre,
+                            style: track.style,
+                            mood: track.mood,
+                            theme: track.theme,
+                            albumArtist: track.albumArtist,
+                            trackTotal: track.trackTotal,
+                            discNumber: track.discNumber,
+                            discTotal: track.discTotal,
+                            year: track.year,
+                            composer: track.composer,
+                            comment: track.comment,
+                            bitrate: track.bitrate,
+                            samplerate: track.samplerate,
+                            channels: track.channels,
+                            filesize: track.filesize,
+                            originalFormat: track.originalFormat,
+                            addedAt: track.addedAt
+                        )
+                        catalogTrack.catalogAlbum = catalogAlbum
+                        if catalogAlbum.tracks == nil { catalogAlbum.tracks = [] }
+                        catalogAlbum.tracks?.append(catalogTrack)
+                    }
                 }
+
+                bgContext.insert(catalogArtist)
             }
 
-            modelContext.insert(catalogArtist)
+            // Save metadata
+            let metadata = CatalogMetadata(totalTracks: catalogData.totalTracks)
+            bgContext.insert(metadata)
+
+            try? bgContext.save()
         }
-
-        // Save metadata
-        let metadata = CatalogMetadata(totalTracks: remoteCatalog.totalTracks)
-        modelContext.insert(metadata)
-
-        try? modelContext.save()
     }
 
     /// Clear SwiftData catalog cache for force refresh

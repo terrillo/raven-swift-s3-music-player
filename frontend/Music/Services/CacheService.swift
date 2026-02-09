@@ -62,7 +62,8 @@ class CacheService {
         #if os(macOS)
         migrateFromOldCacheLocation()
         #endif
-        loadCachedKeys()
+        let infos = loadCachedKeysFromDB()
+        validateCachedFilesInBackground(trackInfos: infos.trackInfos, artworkInfos: infos.artworkInfos)
     }
 
     #if os(macOS)
@@ -99,79 +100,135 @@ class CacheService {
     }
     #endif
 
-    /// Load all cached keys into memory for O(1) lookups, validating files exist on disk
-    func loadCachedKeys() {
-        // Log cache directory for debugging
-        let cacheDir = cacheDirectory
+    /// Fast path: load all cached keys from SwiftData into memory (no file I/O).
+    /// Called synchronously in init() for near-instant startup.
+    /// Returns track/artwork info for background validation to avoid a second fetch.
+    private func loadCachedKeysFromDB() -> (
+        trackInfos: [(s3Key: String, localFileName: String)],
+        artworkInfos: [(remoteUrl: String, localFileName: String)]
+    ) {
+        let trackDescriptor = FetchDescriptor<CachedTrack>()
+        let tracks = (try? modelContext.fetch(trackDescriptor)) ?? []
+        let trackInfos = tracks.map { (s3Key: $0.s3Key, localFileName: $0.localFileName) }
+        cachedTrackKeys = Set(trackInfos.map { $0.s3Key })
+
+        let artworkDescriptor = FetchDescriptor<CachedArtwork>()
+        let artwork = (try? modelContext.fetch(artworkDescriptor)) ?? []
+        let artworkInfos = artwork.map { (remoteUrl: $0.remoteUrl, localFileName: $0.localFileName) }
+        cachedArtworkUrls = Set(artworkInfos.map { $0.remoteUrl })
+
+        print("CacheService: Loaded \(cachedTrackKeys.count) track keys, \(cachedArtworkUrls.count) artwork keys from DB")
+        return (trackInfos, artworkInfos)
+    }
+
+    /// Deferred path: validate files exist on disk, clean up stale records, update backup flags.
+    /// Runs in a background Task so it doesn't block app launch.
+    /// Uses pre-fetched infos from loadCachedKeysFromDB to avoid a second SwiftData fetch.
+    private func validateCachedFilesInBackground(
+        trackInfos: [(s3Key: String, localFileName: String)],
+        artworkInfos: [(remoteUrl: String, localFileName: String)]
+    ) {
         let tracksDir = tracksDirectory
         let artworkDir = artworkDirectory
-        print("CacheService: Cache directory: \(cacheDir.path)")
-        print("CacheService: Tracks directory exists: \(FileManager.default.fileExists(atPath: tracksDir.path))")
-        print("CacheService: Artwork directory exists: \(FileManager.default.fileExists(atPath: artworkDir.path))")
 
-        // Ensure directories exist before validation
+        // Ensure directories exist
         try? FileManager.default.createDirectory(at: tracksDir, withIntermediateDirectories: true)
         try? FileManager.default.createDirectory(at: artworkDir, withIntermediateDirectories: true)
 
-        // Load and validate cached tracks
-        let trackDescriptor = FetchDescriptor<CachedTrack>()
-        let tracks = (try? modelContext.fetch(trackDescriptor)) ?? []
-        var validTrackKeys: Set<String> = []
-        var staleTrackRecords: [CachedTrack] = []
+        let persistTracks = shouldPersistTracks
+        let persistArtwork = shouldPersistArtwork
 
-        print("CacheService: Found \(tracks.count) track records in database")
+        Task.detached { [weak self] in
+            // Validate track files exist on disk
+            var staleTrackS3Keys: Set<String> = []
+            var trackFilenames: [String] = []
 
-        for track in tracks {
-            let localURL = tracksDir.appendingPathComponent(track.localFileName)
-            if FileManager.default.fileExists(atPath: localURL.path) {
-                validTrackKeys.insert(track.s3Key)
-            } else {
-                staleTrackRecords.append(track)
+            for info in trackInfos {
+                let localURL = tracksDir.appendingPathComponent(info.localFileName)
+                if FileManager.default.fileExists(atPath: localURL.path) {
+                    trackFilenames.append(info.localFileName)
+                } else {
+                    staleTrackS3Keys.insert(info.s3Key)
+                }
             }
+
+            // Validate artwork files exist on disk
+            var staleArtworkUrls: Set<String> = []
+            var artworkFilenames: [String] = []
+
+            for info in artworkInfos {
+                let localURL = artworkDir.appendingPathComponent(info.localFileName)
+                if FileManager.default.fileExists(atPath: localURL.path) {
+                    artworkFilenames.append(info.localFileName)
+                } else {
+                    staleArtworkUrls.insert(info.remoteUrl)
+                }
+            }
+
+            // Update backup exclusion flags on all valid files (file I/O in background)
+            let excludeTracks = !persistTracks
+            for filename in trackFilenames {
+                var localURL = tracksDir.appendingPathComponent(filename)
+                var resourceValues = URLResourceValues()
+                resourceValues.isExcludedFromBackup = excludeTracks
+                try? localURL.setResourceValues(resourceValues)
+            }
+
+            let excludeArtwork = !persistArtwork
+            for filename in artworkFilenames {
+                var localURL = artworkDir.appendingPathComponent(filename)
+                var resourceValues = URLResourceValues()
+                resourceValues.isExcludedFromBackup = excludeArtwork
+                try? localURL.setResourceValues(resourceValues)
+            }
+
+            if !staleTrackS3Keys.isEmpty {
+                print("CacheService: Found \(staleTrackS3Keys.count) stale track records (files missing from disk)")
+            }
+            if !staleArtworkUrls.isEmpty {
+                print("CacheService: Found \(staleArtworkUrls.count) stale artwork records (files missing from disk)")
+            }
+
+            // Remove stale keys and clean up DB records on MainActor.
+            // Uses subtract (not replace) to preserve keys added by downloads during validation.
+            if !staleTrackS3Keys.isEmpty || !staleArtworkUrls.isEmpty {
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
+
+                    // Remove stale keys (preserves any new keys added during validation)
+                    self.cachedTrackKeys.subtract(staleTrackS3Keys)
+                    self.cachedArtworkUrls.subtract(staleArtworkUrls)
+
+                    // Clean up stale records from DB
+                    if !staleTrackS3Keys.isEmpty {
+                        let descriptor = FetchDescriptor<CachedTrack>()
+                        if let allTracks = try? self.modelContext.fetch(descriptor) {
+                            for track in allTracks where staleTrackS3Keys.contains(track.s3Key) {
+                                self.modelContext.delete(track)
+                            }
+                        }
+                    }
+                    if !staleArtworkUrls.isEmpty {
+                        let descriptor = FetchDescriptor<CachedArtwork>()
+                        if let allArtwork = try? self.modelContext.fetch(descriptor) {
+                            for art in allArtwork where staleArtworkUrls.contains(art.remoteUrl) {
+                                self.modelContext.delete(art)
+                            }
+                        }
+                    }
+                    try? self.modelContext.save()
+                }
+            }
+
+            print("CacheService: Validation complete — removed \(staleTrackS3Keys.count) stale tracks, \(staleArtworkUrls.count) stale artwork")
         }
-        cachedTrackKeys = validTrackKeys
+    }
 
-        // Load and validate cached artwork
-        let artworkDescriptor = FetchDescriptor<CachedArtwork>()
-        let artwork = (try? modelContext.fetch(artworkDescriptor)) ?? []
-        var validArtworkUrls: Set<String> = []
-        var staleArtworkRecords: [CachedArtwork] = []
-
-        print("CacheService: Found \(artwork.count) artwork records in database")
-
-        for art in artwork {
-            let localURL = artworkDir.appendingPathComponent(art.localFileName)
-            if FileManager.default.fileExists(atPath: localURL.path) {
-                validArtworkUrls.insert(art.remoteUrl)
-            } else {
-                staleArtworkRecords.append(art)
-            }
-        }
-        cachedArtworkUrls = validArtworkUrls
-
-        // Clean up stale records in batch
-        if !staleTrackRecords.isEmpty || !staleArtworkRecords.isEmpty {
-            for record in staleTrackRecords {
-                modelContext.delete(record)
-            }
-            for record in staleArtworkRecords {
-                modelContext.delete(record)
-            }
-            try? modelContext.save()
-
-            if !staleTrackRecords.isEmpty {
-                print("CacheService: Cleaned up \(staleTrackRecords.count) stale track records (files missing from disk)")
-            }
-            if !staleArtworkRecords.isEmpty {
-                print("CacheService: Cleaned up \(staleArtworkRecords.count) stale artwork records (files missing from disk)")
-            }
-        }
-
-        print("CacheService: Valid cached tracks: \(validTrackKeys.count), Valid cached artwork: \(validArtworkUrls.count)")
-
-        // Ensure backup exclusion flags match current settings
-        updateTrackBackupExclusion()
-        updateArtworkBackupExclusion()
+    /// Full reload (called externally, e.g. from settings changes).
+    /// Uses the fast DB path + background validation.
+    func loadCachedKeys() {
+        let infos = loadCachedKeysFromDB()
+        validateCachedFilesInBackground(trackInfos: infos.trackInfos, artworkInfos: infos.artworkInfos)
     }
 
     // MARK: - Directory Management
@@ -801,13 +858,17 @@ class CacheService {
         let exclude = !shouldPersistTracks
         let descriptor = FetchDescriptor<CachedTrack>()
         guard let tracks = try? modelContext.fetch(descriptor) else { return }
+        let filenames = tracks.map { $0.localFileName }
+        let tracksDir = tracksDirectory
 
-        for track in tracks {
-            var localURL = tracksDirectory.appendingPathComponent(track.localFileName)
-            guard FileManager.default.fileExists(atPath: localURL.path) else { continue }
-            var resourceValues = URLResourceValues()
-            resourceValues.isExcludedFromBackup = exclude
-            try? localURL.setResourceValues(resourceValues)
+        Task.detached {
+            for filename in filenames {
+                var localURL = tracksDir.appendingPathComponent(filename)
+                guard FileManager.default.fileExists(atPath: localURL.path) else { continue }
+                var resourceValues = URLResourceValues()
+                resourceValues.isExcludedFromBackup = exclude
+                try? localURL.setResourceValues(resourceValues)
+            }
         }
     }
 
@@ -816,13 +877,17 @@ class CacheService {
         let exclude = !shouldPersistArtwork
         let descriptor = FetchDescriptor<CachedArtwork>()
         guard let artwork = try? modelContext.fetch(descriptor) else { return }
+        let filenames = artwork.map { $0.localFileName }
+        let artworkDir = artworkDirectory
 
-        for art in artwork {
-            var localURL = artworkDirectory.appendingPathComponent(art.localFileName)
-            guard FileManager.default.fileExists(atPath: localURL.path) else { continue }
-            var resourceValues = URLResourceValues()
-            resourceValues.isExcludedFromBackup = exclude
-            try? localURL.setResourceValues(resourceValues)
+        Task.detached {
+            for filename in filenames {
+                var localURL = artworkDir.appendingPathComponent(filename)
+                guard FileManager.default.fileExists(atPath: localURL.path) else { continue }
+                var resourceValues = URLResourceValues()
+                resourceValues.isExcludedFromBackup = exclude
+                try? localURL.setResourceValues(resourceValues)
+            }
         }
     }
 

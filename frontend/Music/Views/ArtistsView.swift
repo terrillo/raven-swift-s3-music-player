@@ -830,6 +830,9 @@ struct AlbumDetailView: View {
                     let isPlayable = playerService.isTrackPlayable(track)
                     Button {
                         if isPlayable {
+                            if playerService.isShuffled {
+                                playerService.toggleShuffle()
+                            }
                             playerService.play(track: track, album: album)
                         }
                     } label: {

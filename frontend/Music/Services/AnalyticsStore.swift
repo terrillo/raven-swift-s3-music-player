@@ -70,41 +70,66 @@ class AnalyticsStore {
 
     func recordPlay(track: Track, duration: TimeInterval, trackDuration: TimeInterval? = nil, previousTrackS3Key: String? = nil) {
         guard isAvailable else { return }
-        let event = PlayEventEntity(context: viewContext)
-        event.trackS3Key = track.s3Key
-        event.trackTitle = track.title
-        event.artistName = track.artist
-        event.playedAt = Date()
-        event.duration = duration
-        event.previousTrackS3Key = previousTrackS3Key
 
-        // Calculate completion rate if track duration is provided
+        // Capture values for background context
+        let s3Key = track.s3Key
+        let title = track.title
+        let artist = track.artist
+        let completionRate: Double
         if let totalDuration = trackDuration, totalDuration > 0 {
-            event.completionRate = min(duration / totalDuration, 1.0)
+            completionRate = min(duration / totalDuration, 1.0)
         } else {
-            event.completionRate = 1.0  // Default to 100% if unknown
+            completionRate = 1.0
         }
 
-        do {
-            try viewContext.save()
-        } catch {
-            print("Failed to save play event: \(error)")
+        let container = self.container
+        Task.detached {
+            let bgContext = container.newBackgroundContext()
+            bgContext.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
+            await bgContext.perform {
+                let event = PlayEventEntity(context: bgContext)
+                event.trackS3Key = s3Key
+                event.trackTitle = title
+                event.artistName = artist
+                event.playedAt = Date()
+                event.duration = duration
+                event.previousTrackS3Key = previousTrackS3Key
+                event.completionRate = completionRate
+
+                do {
+                    try bgContext.save()
+                } catch {
+                    print("Failed to save play event: \(error)")
+                }
+            }
         }
     }
 
     func recordSkip(track: Track, playedDuration: TimeInterval) {
         guard isAvailable else { return }
-        let event = SkipEventEntity(context: viewContext)
-        event.trackS3Key = track.s3Key
-        event.trackTitle = track.title
-        event.artistName = track.artist
-        event.skippedAt = Date()
-        event.playedDuration = playedDuration
 
-        do {
-            try viewContext.save()
-        } catch {
-            print("Failed to save skip event: \(error)")
+        let s3Key = track.s3Key
+        let title = track.title
+        let artist = track.artist
+
+        let container = self.container
+        Task.detached {
+            let bgContext = container.newBackgroundContext()
+            bgContext.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
+            await bgContext.perform {
+                let event = SkipEventEntity(context: bgContext)
+                event.trackS3Key = s3Key
+                event.trackTitle = title
+                event.artistName = artist
+                event.skippedAt = Date()
+                event.playedDuration = playedDuration
+
+                do {
+                    try bgContext.save()
+                } catch {
+                    print("Failed to save skip event: \(error)")
+                }
+            }
         }
     }
 
@@ -397,6 +422,87 @@ class AnalyticsStore {
         }
 
         return batch
+    }
+
+    // MARK: - Background Analytics Fetch (for ShuffleService)
+
+    /// Fetch all analytics on a background context — does not block main thread.
+    /// Returns a Sendable AnalyticsBatch that can be used from any isolation context.
+    nonisolated func fetchAllAnalyticsInBackground(for trackKeys: Set<String>) async -> AnalyticsBatch {
+        let bgContext = container.newBackgroundContext()
+        bgContext.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
+
+        return await bgContext.perform {
+            var batch = AnalyticsBatch()
+
+            // Single fetch for play events
+            let playRequest = NSFetchRequest<PlayEventEntity>(entityName: "PlayEventEntity")
+            playRequest.predicate = NSPredicate(format: "trackS3Key IN %@", trackKeys)
+            let playEvents = (try? bgContext.fetch(playRequest)) ?? []
+
+            // Compute time-of-day period
+            let hour = Calendar.current.component(.hour, from: Date())
+            let periodRange: (start: Int, end: Int) = {
+                switch hour {
+                case 5..<12: return (5, 12)
+                case 12..<17: return (12, 17)
+                case 17..<21: return (17, 21)
+                default: return (21, 5)
+                }
+            }()
+            let calendar = Calendar.current
+
+            // Single pass over play events to compute all metrics
+            var completionTotals: [String: (sum: Double, count: Int)] = [:]
+            for event in playEvents {
+                guard let key = event.trackS3Key else { continue }
+
+                batch.playCounts[key, default: 0] += 1
+
+                if let date = event.playedAt {
+                    if batch.lastPlayDates[key] == nil || date > batch.lastPlayDates[key]! {
+                        batch.lastPlayDates[key] = date
+                    }
+
+                    let eventHour = calendar.component(.hour, from: date)
+                    let inPeriod: Bool
+                    if periodRange.start < periodRange.end {
+                        inPeriod = eventHour >= periodRange.start && eventHour < periodRange.end
+                    } else {
+                        inPeriod = eventHour >= periodRange.start || eventHour < periodRange.end
+                    }
+                    if inPeriod {
+                        batch.timeOfDayScores[key, default: 0] += 1
+                    }
+                }
+
+                let existing = completionTotals[key] ?? (0.0, 0)
+                completionTotals[key] = (existing.sum + event.completionRate, existing.count + 1)
+            }
+
+            for (key, data) in completionTotals {
+                batch.completionRates[key] = data.count > 0 ? data.sum / Double(data.count) : 1.0
+            }
+
+            // Single fetch for skip events
+            let skipRequest = NSFetchRequest<SkipEventEntity>(entityName: "SkipEventEntity")
+            let cutoffDate = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date()
+            skipRequest.predicate = NSPredicate(format: "trackS3Key IN %@ AND skippedAt >= %@", trackKeys, cutoffDate as NSDate)
+            let skipEvents = (try? bgContext.fetch(skipRequest)) ?? []
+
+            for event in skipEvents {
+                guard let key = event.trackS3Key else { continue }
+                let existing = batch.skipData[key] ?? (0, nil)
+                let mostRecent: Date? = {
+                    guard let eventDate = event.skippedAt else { return existing.mostRecent }
+                    guard let existingDate = existing.mostRecent else { return eventDate }
+                    return eventDate > existingDate ? eventDate : existingDate
+                }()
+                batch.skipData[key] = (existing.count + 1, mostRecent)
+            }
+
+            return batch
+        }
     }
 
     // MARK: - Co-Play Pairs for Affinity

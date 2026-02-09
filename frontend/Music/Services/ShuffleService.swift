@@ -22,6 +22,57 @@ struct ShuffleContext {
 @MainActor
 class ShuffleService {
 
+    // MARK: - Analytics Cache
+
+    /// Cached analytics batch to avoid repeated Core Data fetches on rapid skips
+    private var cachedAnalytics: AnalyticsStore.AnalyticsBatch?
+    private var cachedAnalyticsTrackKeys: Set<String>?
+    private var cachedAnalyticsTimestamp: Date?
+    private static let analyticsCacheTTL: TimeInterval = 30  // 30 seconds
+
+    /// Pre-warm the analytics cache in the background for a set of tracks.
+    /// Call this when shuffle playback starts or queue changes.
+    func preWarmAnalytics(for tracks: [Track]) {
+        let trackKeys = Set(tracks.map { $0.s3Key })
+        Task.detached {
+            let batch = await AnalyticsStore.shared.fetchAllAnalyticsInBackground(for: trackKeys)
+            await MainActor.run { [batch] in
+                self.cachedAnalytics = batch
+                self.cachedAnalyticsTrackKeys = trackKeys
+                self.cachedAnalyticsTimestamp = Date()
+            }
+        }
+    }
+
+    /// Invalidate the analytics cache (e.g. after recording a play/skip)
+    func invalidateAnalyticsCache() {
+        cachedAnalytics = nil
+        cachedAnalyticsTrackKeys = nil
+        cachedAnalyticsTimestamp = nil
+    }
+
+    /// Get analytics, using cache if valid, otherwise fetching in background
+    private func getAnalytics(for trackKeys: Set<String>) async -> AnalyticsStore.AnalyticsBatch {
+        // Check if cache is still valid
+        if let cached = cachedAnalytics,
+           let cachedKeys = cachedAnalyticsTrackKeys,
+           let timestamp = cachedAnalyticsTimestamp,
+           Date().timeIntervalSince(timestamp) < Self.analyticsCacheTTL,
+           trackKeys.isSubset(of: cachedKeys) {
+            return cached
+        }
+
+        // Fetch in background
+        let batch = await AnalyticsStore.shared.fetchAllAnalyticsInBackground(for: trackKeys)
+
+        // Cache the result
+        self.cachedAnalytics = batch
+        self.cachedAnalyticsTrackKeys = trackKeys
+        self.cachedAnalyticsTimestamp = Date()
+
+        return batch
+    }
+
     // MARK: - Weight Configuration
 
     private enum WeightConfig {
@@ -68,7 +119,20 @@ class ShuffleService {
 
     // MARK: - Public Methods
 
-    /// Calculate weights for all tracks based on play history and context
+    /// Calculate weights for all tracks based on play history and context (async, uses cached analytics)
+    func calculateWeightsAsync(
+        for tracks: [Track],
+        context: ShuffleContext = ShuffleContext()
+    ) async -> [TrackWeight] {
+        guard !tracks.isEmpty else { return [] }
+
+        let trackKeys = Set(tracks.map { $0.s3Key })
+        let analytics = await getAnalytics(for: trackKeys)
+
+        return calculateWeightsWithBatch(for: tracks, analytics: analytics, context: context)
+    }
+
+    /// Calculate weights for all tracks based on play history and context (sync, for backward compat)
     func calculateWeights(
         for tracks: [Track],
         context: ShuffleContext = ShuffleContext()
@@ -77,8 +141,30 @@ class ShuffleService {
 
         let trackKeys = Set(tracks.map { $0.s3Key })
 
-        // Fetch all analytics in a single batch (fewer DB queries)
-        let analytics = AnalyticsStore.shared.fetchAllAnalytics(for: trackKeys)
+        // Use cached analytics if available, otherwise fall back to main-thread fetch
+        let analytics: AnalyticsStore.AnalyticsBatch
+        if let cached = cachedAnalytics,
+           let cachedKeys = cachedAnalyticsTrackKeys,
+           let timestamp = cachedAnalyticsTimestamp,
+           Date().timeIntervalSince(timestamp) < Self.analyticsCacheTTL,
+           trackKeys.isSubset(of: cachedKeys) {
+            analytics = cached
+        } else {
+            analytics = AnalyticsStore.shared.fetchAllAnalytics(for: trackKeys)
+            self.cachedAnalytics = analytics
+            self.cachedAnalyticsTrackKeys = trackKeys
+            self.cachedAnalyticsTimestamp = Date()
+        }
+
+        return calculateWeightsWithBatch(for: tracks, analytics: analytics, context: context)
+    }
+
+    /// Shared weight calculation using a pre-fetched analytics batch
+    private func calculateWeightsWithBatch(
+        for tracks: [Track],
+        analytics: AnalyticsStore.AnalyticsBatch,
+        context: ShuffleContext
+    ) -> [TrackWeight] {
         let playCounts = analytics.playCounts
         let skipData = analytics.skipData
         let lastPlayDates = analytics.lastPlayDates

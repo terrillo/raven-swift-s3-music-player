@@ -15,12 +15,11 @@ class FavoritesStore {
     private(set) var favoriteAlbumIds: Set<String> = []
     private(set) var favoriteTrackKeys: Set<String> = []
 
-    private var viewContext: NSManagedObjectContext { AnalyticsStore.shared.viewContext }
+    private var container: NSPersistentCloudKitContainer { AnalyticsStore.shared.container }
     private var cancellables = Set<AnyCancellable>()
 
     private init() {
-        loadFavorites()
-        observeChanges()
+        loadFavoritesInBackground()
         observeRemoteChanges()
     }
 
@@ -31,34 +30,24 @@ class FavoritesStore {
     }
 
     func toggleArtistFavorite(_ artist: Artist) {
-        if isArtistFavorite(artist.id) {
-            removeArtistFavorite(artist.id)
-        } else {
-            addArtistFavorite(artist)
-        }
-    }
-
-    private func addArtistFavorite(_ artist: Artist) {
-        let entity = FavoriteArtistEntity(context: viewContext)
-        entity.artistId = artist.id
-        entity.artistName = artist.name
-        entity.favoritedAt = Date()
-
-        saveAndUpdate()
-    }
-
-    private func removeArtistFavorite(_ artistId: String) {
-        let request = NSFetchRequest<FavoriteArtistEntity>(entityName: "FavoriteArtistEntity")
-        request.predicate = NSPredicate(format: "artistId == %@", artistId)
-
-        do {
-            let results = try viewContext.fetch(request)
-            for entity in results {
-                viewContext.delete(entity)
+        let artistId = artist.id
+        if isArtistFavorite(artistId) {
+            favoriteArtistIds.remove(artistId)
+            persistInBackground(rollback: { [weak self] in self?.favoriteArtistIds.insert(artistId) }) { context in
+                let request = NSFetchRequest<FavoriteArtistEntity>(entityName: "FavoriteArtistEntity")
+                request.predicate = NSPredicate(format: "artistId == %@", artistId)
+                let results = try context.fetch(request)
+                for entity in results { context.delete(entity) }
             }
-            saveAndUpdate()
-        } catch {
-            print("Failed to remove artist favorite: \(error)")
+        } else {
+            favoriteArtistIds.insert(artistId)
+            let artistName = artist.name
+            persistInBackground(rollback: { [weak self] in self?.favoriteArtistIds.remove(artistId) }) { context in
+                let entity = FavoriteArtistEntity(context: context)
+                entity.artistId = artistId
+                entity.artistName = artistName
+                entity.favoritedAt = Date()
+            }
         }
     }
 
@@ -69,35 +58,26 @@ class FavoritesStore {
     }
 
     func toggleAlbumFavorite(_ album: Album) {
-        if isAlbumFavorite(album.id) {
-            removeAlbumFavorite(album.id)
-        } else {
-            addAlbumFavorite(album)
-        }
-    }
-
-    private func addAlbumFavorite(_ album: Album) {
-        let entity = FavoriteAlbumEntity(context: viewContext)
-        entity.albumId = album.id
-        entity.albumName = album.name
-        entity.artistName = album.tracks.first?.artist
-        entity.favoritedAt = Date()
-
-        saveAndUpdate()
-    }
-
-    private func removeAlbumFavorite(_ albumId: String) {
-        let request = NSFetchRequest<FavoriteAlbumEntity>(entityName: "FavoriteAlbumEntity")
-        request.predicate = NSPredicate(format: "albumId == %@", albumId)
-
-        do {
-            let results = try viewContext.fetch(request)
-            for entity in results {
-                viewContext.delete(entity)
+        let albumId = album.id
+        if isAlbumFavorite(albumId) {
+            favoriteAlbumIds.remove(albumId)
+            persistInBackground(rollback: { [weak self] in self?.favoriteAlbumIds.insert(albumId) }) { context in
+                let request = NSFetchRequest<FavoriteAlbumEntity>(entityName: "FavoriteAlbumEntity")
+                request.predicate = NSPredicate(format: "albumId == %@", albumId)
+                let results = try context.fetch(request)
+                for entity in results { context.delete(entity) }
             }
-            saveAndUpdate()
-        } catch {
-            print("Failed to remove album favorite: \(error)")
+        } else {
+            favoriteAlbumIds.insert(albumId)
+            let albumName = album.name
+            let artistName = album.tracks.first?.artist
+            persistInBackground(rollback: { [weak self] in self?.favoriteAlbumIds.remove(albumId) }) { context in
+                let entity = FavoriteAlbumEntity(context: context)
+                entity.albumId = albumId
+                entity.albumName = albumName
+                entity.artistName = artistName
+                entity.favoritedAt = Date()
+            }
         }
     }
 
@@ -108,35 +88,26 @@ class FavoritesStore {
     }
 
     func toggleTrackFavorite(_ track: Track) {
-        if isTrackFavorite(track.s3Key) {
-            removeTrackFavorite(track.s3Key)
-        } else {
-            addTrackFavorite(track)
-        }
-    }
-
-    private func addTrackFavorite(_ track: Track) {
-        let entity = FavoriteTrackEntity(context: viewContext)
-        entity.trackS3Key = track.s3Key
-        entity.trackTitle = track.title
-        entity.artistName = track.artist
-        entity.favoritedAt = Date()
-
-        saveAndUpdate()
-    }
-
-    private func removeTrackFavorite(_ s3Key: String) {
-        let request = NSFetchRequest<FavoriteTrackEntity>(entityName: "FavoriteTrackEntity")
-        request.predicate = NSPredicate(format: "trackS3Key == %@", s3Key)
-
-        do {
-            let results = try viewContext.fetch(request)
-            for entity in results {
-                viewContext.delete(entity)
+        let s3Key = track.s3Key
+        if isTrackFavorite(s3Key) {
+            favoriteTrackKeys.remove(s3Key)
+            persistInBackground(rollback: { [weak self] in self?.favoriteTrackKeys.insert(s3Key) }) { context in
+                let request = NSFetchRequest<FavoriteTrackEntity>(entityName: "FavoriteTrackEntity")
+                request.predicate = NSPredicate(format: "trackS3Key == %@", s3Key)
+                let results = try context.fetch(request)
+                for entity in results { context.delete(entity) }
             }
-            saveAndUpdate()
-        } catch {
-            print("Failed to remove track favorite: \(error)")
+        } else {
+            favoriteTrackKeys.insert(s3Key)
+            let title = track.title
+            let artist = track.artist
+            persistInBackground(rollback: { [weak self] in self?.favoriteTrackKeys.remove(s3Key) }) { context in
+                let entity = FavoriteTrackEntity(context: context)
+                entity.trackS3Key = s3Key
+                entity.trackTitle = title
+                entity.artistName = artist
+                entity.favoritedAt = Date()
+            }
         }
     }
 
@@ -145,76 +116,91 @@ class FavoritesStore {
     func fetchFavoriteArtists() -> [FavoriteArtistEntity] {
         let request = NSFetchRequest<FavoriteArtistEntity>(entityName: "FavoriteArtistEntity")
         request.sortDescriptors = [NSSortDescriptor(keyPath: \FavoriteArtistEntity.artistName, ascending: true)]
-
-        return (try? viewContext.fetch(request)) ?? []
+        return (try? container.viewContext.fetch(request)) ?? []
     }
 
     func fetchFavoriteTracks() -> [FavoriteTrackEntity] {
         let request = NSFetchRequest<FavoriteTrackEntity>(entityName: "FavoriteTrackEntity")
         request.sortDescriptors = [NSSortDescriptor(keyPath: \FavoriteTrackEntity.trackTitle, ascending: true)]
-
-        return (try? viewContext.fetch(request)) ?? []
+        return (try? container.viewContext.fetch(request)) ?? []
     }
 
     func fetchFavoriteAlbums() -> [FavoriteAlbumEntity] {
         let request = NSFetchRequest<FavoriteAlbumEntity>(entityName: "FavoriteAlbumEntity")
         request.sortDescriptors = [NSSortDescriptor(keyPath: \FavoriteAlbumEntity.albumName, ascending: true)]
-
-        return (try? viewContext.fetch(request)) ?? []
+        return (try? container.viewContext.fetch(request)) ?? []
     }
 
     // MARK: - Private Helpers
 
-    private func saveAndUpdate() {
-        do {
-            try viewContext.save()
-            loadFavorites()
-        } catch {
-            print("Failed to save favorites: \(error)")
-        }
-    }
-
-    private func loadFavorites() {
-        // Load artist favorites
-        let artistRequest = NSFetchRequest<FavoriteArtistEntity>(entityName: "FavoriteArtistEntity")
-        if let artists = try? viewContext.fetch(artistRequest) {
-            favoriteArtistIds = Set(artists.compactMap { $0.artistId })
-        }
-
-        // Load album favorites
-        let albumRequest = NSFetchRequest<FavoriteAlbumEntity>(entityName: "FavoriteAlbumEntity")
-        if let albums = try? viewContext.fetch(albumRequest) {
-            favoriteAlbumIds = Set(albums.compactMap { $0.albumId })
-        }
-
-        // Load track favorites
-        let trackRequest = NSFetchRequest<FavoriteTrackEntity>(entityName: "FavoriteTrackEntity")
-        if let tracks = try? viewContext.fetch(trackRequest) {
-            favoriteTrackKeys = Set(tracks.compactMap { $0.trackS3Key })
-        }
-    }
-
-    private func observeChanges() {
-        NotificationCenter.default.publisher(for: .NSManagedObjectContextObjectsDidChange, object: viewContext)
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                self?.loadFavorites()
+    /// Perform Core Data work on a background context, then save.
+    /// On failure, calls the rollback closure on MainActor to undo the optimistic UI update.
+    private func persistInBackground(
+        rollback: @escaping @MainActor () -> Void = {},
+        _ work: @escaping (NSManagedObjectContext) throws -> Void
+    ) {
+        let container = self.container
+        Task.detached {
+            let bgContext = container.newBackgroundContext()
+            bgContext.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
+            do {
+                try await bgContext.perform {
+                    try work(bgContext)
+                    try bgContext.save()
+                }
+            } catch {
+                print("FavoritesStore: Background persist failed: \(error)")
+                await MainActor.run { rollback() }
             }
-            .store(in: &cancellables)
+        }
+    }
+
+    /// Load favorites from Core Data on a background context, then merge with current state on MainActor.
+    /// Uses merge (not replace) to avoid overwriting optimistic UI updates from pending toggles.
+    private func loadFavoritesInBackground() {
+        let container = self.container
+        Task.detached {
+            let bgContext = container.newBackgroundContext()
+            bgContext.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
+
+            let (artistIds, albumIds, trackKeys) = await bgContext.perform {
+                let artistRequest = NSFetchRequest<FavoriteArtistEntity>(entityName: "FavoriteArtistEntity")
+                let artists = (try? bgContext.fetch(artistRequest)) ?? []
+                let artistIds = Set(artists.compactMap { $0.artistId })
+
+                let albumRequest = NSFetchRequest<FavoriteAlbumEntity>(entityName: "FavoriteAlbumEntity")
+                let albums = (try? bgContext.fetch(albumRequest)) ?? []
+                let albumIds = Set(albums.compactMap { $0.albumId })
+
+                let trackRequest = NSFetchRequest<FavoriteTrackEntity>(entityName: "FavoriteTrackEntity")
+                let tracks = (try? bgContext.fetch(trackRequest)) ?? []
+                let trackKeys = Set(tracks.compactMap { $0.trackS3Key })
+
+                return (artistIds, albumIds, trackKeys)
+            }
+
+            // Replace in-memory sets — this is the authoritative DB state.
+            // Optimistic toggles that haven't persisted yet will re-apply on next toggle.
+            await MainActor.run { [artistIds, albumIds, trackKeys] in
+                self.favoriteArtistIds = artistIds
+                self.favoriteAlbumIds = albumIds
+                self.favoriteTrackKeys = trackKeys
+            }
+        }
     }
 
     private func observeRemoteChanges() {
-        // Observe CloudKit remote changes
-        NotificationCenter.default.publisher(for: .NSPersistentStoreRemoteChange, object: AnalyticsStore.shared.container.persistentStoreCoordinator)
-            .receive(on: DispatchQueue.main)
+        // Observe CloudKit remote changes (merges from other devices)
+        NotificationCenter.default.publisher(for: .NSPersistentStoreRemoteChange, object: container.persistentStoreCoordinator)
+            .debounce(for: .milliseconds(500), scheduler: DispatchQueue.main)
             .sink { [weak self] _ in
-                self?.loadFavorites()
+                self?.loadFavoritesInBackground()
             }
             .store(in: &cancellables)
     }
 
     /// Force refresh favorites from Core Data
     func refresh() {
-        loadFavorites()
+        loadFavoritesInBackground()
     }
 }
