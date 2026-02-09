@@ -24,6 +24,7 @@ struct UploadView: View {
     @State private var preview: UploadPreview?
     @State private var showingPreview = false
     @State private var isScanning = false
+    @State private var scanTask: Task<Void, Never>?
     @State private var scanError: Error?
 
     var body: some View {
@@ -264,6 +265,7 @@ struct UploadView: View {
                 .buttonStyle(.bordered)
             } else if isScanning {
                 Button("Cancel") {
+                    scanTask?.cancel()
                     isScanning = false
                 }
                 .buttonStyle(.bordered)
@@ -293,12 +295,16 @@ struct UploadView: View {
         isScanning = true
         scanError = nil
 
-        Task {
+        scanTask = Task {
             do {
                 let result = try await uploader.scanForPreview(from: folder)
                 await MainActor.run {
                     preview = result
                     showingPreview = true
+                    isScanning = false
+                }
+            } catch is CancellationError {
+                await MainActor.run {
                     isScanning = false
                 }
             } catch {
@@ -700,8 +706,7 @@ struct UploadSettingsView: View {
 
             // Save CDN settings to iCloud for iOS to discover
             let store = NSUbiquitousKeyValueStore.default
-            let cdnBase = "https://\(spacesBucket).\(spacesRegion).cdn.digitaloceanspaces.com"
-            store.set(cdnBase, forKey: "cdnBaseURL")
+            store.set(config.cdnBaseURLWithoutPrefix, forKey: "cdnBaseURL")
             store.set(spacesPrefix, forKey: "cdnPrefix")
             store.synchronize()
 
