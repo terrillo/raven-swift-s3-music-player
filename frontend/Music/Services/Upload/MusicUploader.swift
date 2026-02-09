@@ -24,12 +24,15 @@ struct UploadPreviewItem: Identifiable {
     let format: String
     let needsConversion: Bool
     let fileURL: URL                // Original file URL for upload
+    let metadata: TrackMetadata     // Cached from scan phase to avoid re-extraction
 }
 
 /// Preview of what will be uploaded, split into new and existing files
 struct UploadPreview {
     let newFiles: [UploadPreviewItem]           // Files to upload
     let skippedFiles: [UploadPreviewItem]       // Already exist on remote
+    let existingCatalogKeys: Set<String>        // All s3Keys from existing catalog (for existingKeysCache)
+    let existingAddedAtMap: [String: Date]      // Preserved addedAt dates from catalog
 
     var totalNewFiles: Int { newFiles.count }
     var totalSkippedFiles: Int { skippedFiles.count }
@@ -180,7 +183,6 @@ class MusicUploader {
         }
 
         // Initialize services
-        let storageService = StorageService(config: config)
         let theAudioDB = TheAudioDBService(storageService: nil)  // No storage for preview
         let metadataExtractor = MetadataExtractor(musicDirectory: folderURL)
 
@@ -196,9 +198,9 @@ class MusicUploader {
             throw UploaderError.noAudioFilesFound
         }
 
-        // Phase 2: Fetch existing files from storage (parallel with phase 3)
+        // Phase 2: Fetch existing catalog from CDN (single HTTP request vs 12+ paginated S3 requests)
         progress.phase = .fetchingExisting
-        async let existingKeysTask = storageService.listAllFiles()
+        async let catalogDataTask = fetchCatalogData(config: config)
 
         // Phase 3: Extract metadata in parallel (much faster for 12k+ files)
         progress.phase = .fetchingMetadata
@@ -230,6 +232,11 @@ class MusicUploader {
                 }
 
                 group.addTask {
+                    // Fast path: concurrent cache lookup (no actor hop)
+                    if let cached = metadataExtractor.cacheSnapshot.lookup(fileURL: fileURL) {
+                        return (fileURL, cached)
+                    }
+                    // Slow path: actor-isolated extraction (cache miss)
                     let metadata = await metadataExtractor.extract(from: fileURL)
                     return (fileURL, metadata)
                 }
@@ -251,8 +258,9 @@ class MusicUploader {
 
         try Task.checkCancellation()
 
-        // Wait for existing keys
-        let existingKeys = try await existingKeysTask
+        // Wait for catalog data (existing keys + addedAt map)
+        let catalogData = await catalogDataTask
+        let existingKeys = catalogData.existingKeys
 
         // Phase 4: Collect unique artists and albums for batch API lookup
         progress.currentFile = "Looking up artist/album corrections..."
@@ -420,7 +428,8 @@ class MusicUploader {
                 s3Key: s3Key,
                 format: format,
                 needsConversion: needsConversion,
-                fileURL: fileURL
+                fileURL: fileURL,
+                metadata: metadata
             )
 
             if existingKeys.contains(s3Key) {
@@ -435,7 +444,7 @@ class MusicUploader {
         await theAudioDB.saveCache()
 
         progress.phase = .idle
-        return UploadPreview(newFiles: newFiles, skippedFiles: skippedFiles)
+        return UploadPreview(newFiles: newFiles, skippedFiles: skippedFiles, existingCatalogKeys: catalogData.existingKeys, existingAddedAtMap: catalogData.addedAtMap)
     }
 
     // MARK: - Upload from Preview
@@ -483,7 +492,6 @@ class MusicUploader {
         let musicBrainz = config.musicBrainzContact.isEmpty ? nil : MusicBrainzService(contact: config.musicBrainzContact)
         let lastFM = config.lastFMApiKey.isEmpty ? nil : LastFMService(apiKey: config.lastFMApiKey, storageService: storageService)
 
-        let metadataExtractor = MetadataExtractor(musicDirectory: folderURL)
         let artworkExtractor = ArtworkExtractor()
         let audioConverter = AudioConverter()
         let localArtworkCache = LocalArtworkCache()
@@ -495,12 +503,11 @@ class MusicUploader {
             cdnBaseURL: config.cdnBaseURL
         )
 
-        // Set existing keys cache (skipped files are already on remote)
-        let existingKeys = Set(preview.skippedFiles.map { $0.s3Key })
-        await storageService.setExistingKeysCache(existingKeys)
+        // Set existing keys cache from full catalog (allows uploadFile's internal fileExists check to use cache)
+        await storageService.setExistingKeysCache(preview.existingCatalogKeys)
 
-        // Fetch existing catalog to preserve addedAt dates for existing tracks
-        let existingAddedAtMap = await fetchExistingAddedAtMap(config: config)
+        // Use addedAt dates from preview (already fetched during scan)
+        let existingAddedAtMap = preview.existingAddedAtMap
 
         try Task.checkCancellation()
 
@@ -541,7 +548,6 @@ class MusicUploader {
                         previewItem: item,
                         config: config,
                         storageService: storageService,
-                        metadataExtractor: metadataExtractor,
                         artworkExtractor: artworkExtractor,
                         audioConverter: audioConverter,
                         localArtworkCache: localArtworkCache,
@@ -567,14 +573,14 @@ class MusicUploader {
         processedTracks = results
 
         // Process skipped files in parallel (they're still part of the catalog)
-        // These files already exist on remote, just need metadata extraction + local art check
+        // These files already exist on remote — metadata comes from cached preview, just need local art check
         let skippedTracks = await withTaskGroup(of: ProcessedTrack?.self) { group in
             var submitted = 0
             var results: [ProcessedTrack] = []
             results.reserveCapacity(preview.skippedFiles.count)
 
             for item in preview.skippedFiles {
-                // Limit concurrency (metadata extraction is I/O heavy)
+                // Limit concurrency (artwork lookup + upload is I/O heavy)
                 if submitted >= Self.maxConcurrentMetadataExtractors {
                     if let result = await group.next(), let track = result {
                         results.append(track)
@@ -582,15 +588,8 @@ class MusicUploader {
                 }
 
                 group.addTask {
-                    // Verify file still exists on remote (may have been deleted between scan and upload)
-                    let exists = await storageService.fileExists(item.s3Key)
-                    if !exists {
-                        print("⚠️ Skipped file no longer exists on remote: \(item.s3Key)")
-                        return nil
-                    }
-
-                    let metadata = await metadataExtractor.extract(from: item.fileURL)
-                    let url = await storageService.getPublicURL(for: item.s3Key)
+                    let metadata = item.metadata
+                    let url = "\(config.cdnBaseURL)/\(item.s3Key)"
 
                     // Preserve existing addedAt or use current date as fallback
                     let addedAt = existingAddedAtMap[item.s3Key] ?? Date()
@@ -685,7 +684,6 @@ class MusicUploader {
         previewItem: UploadPreviewItem,
         config: UploadConfiguration,
         storageService: StorageService,
-        metadataExtractor: MetadataExtractor,
         artworkExtractor: ArtworkExtractor,
         audioConverter: AudioConverter,
         localArtworkCache: LocalArtworkCache,
@@ -694,8 +692,8 @@ class MusicUploader {
         let fileURL = previewItem.fileURL
         let s3Key = previewItem.s3Key
 
-        // Extract full metadata for catalog
-        let metadata = await metadataExtractor.extract(from: fileURL)
+        // Use cached metadata from scan phase (no re-extraction needed)
+        let metadata = previewItem.metadata
 
         // Convert if needed
         var uploadURL = fileURL
@@ -857,13 +855,22 @@ class MusicUploader {
         return audioFiles
     }
 
-    // MARK: - Fetch Existing AddedAt Map
+    // MARK: - Fetch Catalog Data
 
-    /// Fetches the existing catalog.json from CDN and builds a lookup map of s3Key -> addedAt
-    /// Used to preserve addedAt dates for existing tracks during catalog rebuild
-    private func fetchExistingAddedAtMap(config: UploadConfiguration) async -> [String: Date] {
-        guard let url = URL(string: "\(config.cdnBaseURLWithoutPrefix)/\(config.spacesPrefix)/catalog.json") else {
-            return [:]
+    /// Result of fetching catalog.json: existing s3Keys and addedAt dates in one pass
+    private struct CatalogFetchResult: Sendable {
+        let existingKeys: Set<String>
+        let addedAtMap: [String: Date]
+    }
+
+    /// Fetches catalog.json from CDN and extracts both existing keys and addedAt map in one pass.
+    /// Replaces both listAllFiles() (12+ paginated S3 requests) and fetchExistingAddedAtMap().
+    /// Returns empty result on 404/error (first upload).
+    private nonisolated func fetchCatalogData(config: UploadConfiguration) async -> CatalogFetchResult {
+        // Cache-bust to bypass CDN TTL (S3 listing queried origin directly; catalog.json goes through CDN)
+        let cacheBuster = Int(Date().timeIntervalSince1970)
+        guard let url = URL(string: "\(config.cdnBaseURLWithoutPrefix)/\(config.spacesPrefix)/catalog.json?t=\(cacheBuster)") else {
+            return CatalogFetchResult(existingKeys: [], addedAtMap: [:])
         }
 
         do {
@@ -871,18 +878,19 @@ class MusicUploader {
             guard let httpResponse = response as? HTTPURLResponse,
                   httpResponse.statusCode == 200 else {
                 print("📋 No existing catalog found on CDN (new catalog will be created)")
-                return [:]
+                return CatalogFetchResult(existingKeys: [], addedAtMap: [:])
             }
 
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
             let catalog = try decoder.decode(MusicCatalog.self, from: data)
 
-            // Build lookup map of s3Key -> addedAt
+            var keys = Set<String>()
             var addedAtMap: [String: Date] = [:]
             for artist in catalog.artists {
                 for album in artist.albums {
                     for track in album.tracks {
+                        keys.insert(track.s3Key)
                         if let addedAt = track.addedAt {
                             addedAtMap[track.s3Key] = addedAt
                         }
@@ -890,11 +898,11 @@ class MusicUploader {
                 }
             }
 
-            print("📋 Found \(addedAtMap.count) existing tracks with addedAt dates")
-            return addedAtMap
+            print("📋 Found \(keys.count) existing tracks (\(addedAtMap.count) with addedAt dates)")
+            return CatalogFetchResult(existingKeys: keys, addedAtMap: addedAtMap)
         } catch {
             print("⚠️ Could not fetch existing catalog: \(error.localizedDescription)")
-            return [:]
+            return CatalogFetchResult(existingKeys: [], addedAtMap: [:])
         }
     }
 
