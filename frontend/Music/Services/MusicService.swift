@@ -62,6 +62,24 @@ class MusicService {
         catalog?.artists.isEmpty ?? true
     }
 
+    /// All unique artwork URLs from the catalog (artist images, album covers, embedded artwork fallback)
+    var allArtworkUrls: [String] {
+        var urls: Set<String> = []
+        for artist in artists {
+            if let url = artist.imageUrl { urls.insert(url) }
+            for album in artist.albums {
+                if let albumUrl = album.imageUrl {
+                    urls.insert(albumUrl)
+                } else {
+                    for track in album.tracks {
+                        if let url = track.embeddedArtworkUrl { urls.insert(url) }
+                    }
+                }
+            }
+        }
+        return Array(urls)
+    }
+
     var artists: [Artist] {
         if let cached = _cachedArtists { return cached }
         guard let rawArtists = catalog?.artists else { return [] }

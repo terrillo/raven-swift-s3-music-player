@@ -256,6 +256,10 @@ struct ContentView: View {
             if musicService.catalog != nil {
                 playerService.restorePlaybackState(from: musicService)
             }
+            // Prefetch all artwork in background after catalog loads
+            if !musicService.isEmpty {
+                cacheService?.prefetchAllArtwork(urls: musicService.allArtworkUrls)
+            }
         }
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .active {
@@ -264,6 +268,10 @@ struct ContentView: View {
                 if isStale {
                     Task {
                         await musicService.loadCatalog()
+                        // Prefetch artwork after stale catalog reload
+                        if !musicService.isEmpty {
+                            cacheService?.prefetchAllArtwork(urls: musicService.allArtworkUrls)
+                        }
                     }
                 }
             } else if newPhase == .background || newPhase == .inactive {

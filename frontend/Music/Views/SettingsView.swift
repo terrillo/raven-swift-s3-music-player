@@ -200,7 +200,7 @@ struct SettingsView: View {
             CacheDownloadView(
                 cacheService: cacheService,
                 tracks: musicService.songs,
-                artworkUrls: collectArtworkUrls(),
+                artworkUrls: musicService.allArtworkUrls,
                 catalog: musicService.catalog
             )
         }
@@ -436,7 +436,7 @@ struct SettingsView: View {
                 CacheDownloadView(
                     cacheService: cacheService,
                     tracks: musicService.songs,
-                    artworkUrls: collectArtworkUrls(),
+                    artworkUrls: musicService.allArtworkUrls,
                     catalog: musicService.catalog
                 )
             }
@@ -510,28 +510,6 @@ struct SettingsView: View {
         }
     }
 
-    private func collectArtworkUrls() -> [String] {
-        var urls: Set<String> = []
-
-        for artist in musicService.artists {
-            if let url = artist.imageUrl {
-                urls.insert(url)
-            }
-            for album in artist.albums {
-                if let albumUrl = album.imageUrl {
-                    urls.insert(albumUrl)
-                } else {
-                    for track in album.tracks {
-                        if let url = track.embeddedArtworkUrl {
-                            urls.insert(url)
-                        }
-                    }
-                }
-            }
-        }
-
-        return Array(urls)
-    }
 }
 
 // MARK: - macOS Helper Components

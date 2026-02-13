@@ -832,6 +832,61 @@ class CacheService {
         }
     }
 
+    // MARK: - Background Artwork Prefetch
+
+    /// Prefetch all artwork in the background after catalog loads.
+    /// Respects autoImageCachingEnabled setting, skips already-cached URLs,
+    /// and uses 4 concurrent connections to avoid competing with user-initiated downloads.
+    /// Each URL is marked in-progress only when its download starts (not batch),
+    /// so on-demand downloads from ArtworkImage views aren't blocked for queued URLs.
+    private var isPrefetchingArtwork = false
+
+    func prefetchAllArtwork(urls: [String]) {
+        guard shouldPersistArtwork, !isPrefetchingArtwork else { return }
+
+        let uncached = urls.filter { !isArtworkCached($0) && !artworkDownloadsInProgress.contains($0) }
+        guard !uncached.isEmpty else { return }
+
+        isPrefetchingArtwork = true
+        let total = urls.count
+        let toDownload = uncached.count
+        print("CacheService: Artwork prefetch — downloading \(toDownload) of \(total) URLs")
+
+        Task { [weak self] in
+            guard let self else { return }
+            await withTaskGroup(of: Void.self) { group in
+                var active = 0
+                var index = 0
+                let maxConcurrent = 4
+
+                while index < uncached.count || active > 0 {
+                    while active < maxConcurrent && index < uncached.count {
+                        let urlString = uncached[index]
+                        index += 1
+
+                        // Skip if on-demand download claimed it or it was cached in the meantime
+                        if isArtworkCached(urlString) || artworkDownloadsInProgress.contains(urlString) {
+                            continue
+                        }
+
+                        // Mark in-progress just before download starts (not batch)
+                        artworkDownloadsInProgress.insert(urlString)
+                        active += 1
+                        group.addTask {
+                            await self.downloadArtworkBackground(urlString) { _ in }
+                        }
+                    }
+                    if active > 0 {
+                        await group.next()
+                        active -= 1
+                    }
+                }
+            }
+            isPrefetchingArtwork = false
+            print("CacheService: Artwork prefetch complete")
+        }
+    }
+
     // MARK: - Single Track Download (for pre-caching)
 
     func downloadSingleTrack(_ track: Track) async {
