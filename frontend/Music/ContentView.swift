@@ -57,6 +57,7 @@ struct ContentView: View {
     @State private var playerService = PlayerService()
     @State private var cacheService: CacheService?
     @State private var pendingNavigation: NavigationDestination? = nil
+    @State private var favoritesStore = FavoritesStore.shared
 
     /// Empty state shown when no music has been uploaded yet
     private var emptyStateView: some View {
@@ -259,6 +260,8 @@ struct ContentView: View {
             // Prefetch all artwork in background after catalog loads
             if !musicService.isEmpty {
                 cacheService?.prefetchAllArtwork(urls: musicService.allArtworkUrls)
+                // Auto-download favorited tracks for offline use
+                await cacheService?.autoDownloadFavoriteTracks(musicService: musicService)
             }
         }
         .onChange(of: scenePhase) { _, newPhase in
@@ -276,6 +279,12 @@ struct ContentView: View {
                 }
             } else if newPhase == .background || newPhase == .inactive {
                 playerService.savePlaybackState()
+            }
+        }
+        .onChange(of: favoritesStore.favoriteTrackKeys) { _, _ in
+            guard let cacheService, !musicService.isEmpty else { return }
+            Task {
+                await cacheService.autoDownloadFavoriteTracks(musicService: musicService)
             }
         }
     }

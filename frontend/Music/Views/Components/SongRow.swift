@@ -61,6 +61,10 @@ struct SongRow: View {
         FavoritesStore.shared.isTrackFavorite(track.s3Key)
     }
 
+    private var isCached: Bool {
+        cacheService?.isTrackCached(track) ?? isPlayable
+    }
+
     /// Prefer album artwork over embedded artwork to reduce cache size
     /// Falls back to artist image if no album or embedded artwork exists
     private var preferredArtworkUrl: String? {
@@ -337,10 +341,16 @@ struct SongRow: View {
             .buttonStyle(.plain)
         }
 
-        if showDownloadIcon && !isPlayable {
-            Image(systemName: "arrow.down.circle")
-                .foregroundStyle(secondaryColor)
-                .font(.caption)
+        if showDownloadIcon {
+            if isCached {
+                Image(systemName: "arrow.down.circle.fill")
+                    .foregroundStyle(secondaryColor.opacity(0.5))
+                    .font(.caption)
+            } else {
+                Image(systemName: "arrow.down.circle")
+                    .foregroundStyle(secondaryColor)
+                    .font(.caption)
+            }
         }
 
         Text(track.formattedDuration)
@@ -395,6 +405,7 @@ extension SongRow {
     static func albumTrack(
         track: Track,
         playerService: PlayerService,
+        cacheService: CacheService? = nil,
         musicService: MusicService? = nil,
         isPlayable: Bool = true,
         onNavigate: ((NavigationDestination) -> Void)? = nil,
@@ -407,7 +418,7 @@ extension SongRow {
             showFavoriteButton: true,
             showDownloadIcon: true,
             playerService: playerService,
-            cacheService: nil,
+            cacheService: cacheService,
             musicService: musicService,
             isPlayable: isPlayable,
             onNavigate: onNavigate,

@@ -58,7 +58,7 @@ class CacheService {
 
     init(modelContext: ModelContext) {
         self.modelContext = modelContext
-        UserDefaults.standard.register(defaults: ["autoImageCachingEnabled": true, "maxCacheSizeGB": 0])
+        UserDefaults.standard.register(defaults: ["autoImageCachingEnabled": true, "maxCacheSizeGB": 0, "autoDownloadFavoritesEnabled": true])
         #if os(macOS)
         migrateFromOldCacheLocation()
         #endif
@@ -435,6 +435,79 @@ class CacheService {
             await deleteCachedTrack(track)
             currentSize -= freedBytes
         }
+    }
+
+    /// Check if there is available space for more downloads
+    func hasAvailableSpace() -> Bool {
+        guard hasStorageLimit else { return true }
+        return getCacheSize() < maxCacheSizeBytes
+    }
+
+    // MARK: - Auto-Download Favorites
+
+    private var isAutoDownloading = false
+
+    /// Automatically download favorited tracks that aren't yet cached.
+    /// Only runs when streaming mode is enabled and space is available.
+    func autoDownloadFavoriteTracks(musicService: MusicService) async {
+        let autoDownloadEnabled = UserDefaults.standard.bool(forKey: "autoDownloadFavoritesEnabled")
+        guard autoDownloadEnabled else { return }
+
+        let streamingEnabled = UserDefaults.standard.bool(forKey: "streamingModeEnabled")
+        guard streamingEnabled else { return }
+
+        guard !isAutoDownloading, !isDownloading else { return }
+        guard hasAvailableSpace() else { return }
+
+        isAutoDownloading = true
+        defer { isAutoDownloading = false }
+
+        // Find uncached favorite tracks
+        let favoriteKeys = FavoritesStore.shared.favoriteTrackKeys
+        let trackLookup = musicService.trackByS3Key
+        let uncachedFavorites = favoriteKeys.compactMap { key -> Track? in
+            guard !cachedTrackKeys.contains(key) else { return nil }
+            return trackLookup[key]
+        }
+
+        guard !uncachedFavorites.isEmpty else { return }
+
+        print("CacheService: Auto-downloading \(uncachedFavorites.count) favorite tracks")
+
+        // Build artist/album lookup for artwork
+        var trackToArtist: [String: Artist] = [:]
+        var trackToAlbum: [String: Album] = [:]
+        if let catalog = musicService.catalog {
+            for artist in catalog.artists {
+                for album in artist.albums {
+                    for track in album.tracks {
+                        trackToArtist[track.s3Key] = artist
+                        trackToAlbum[track.s3Key] = album
+                    }
+                }
+            }
+        }
+
+        do {
+            try ensureDirectoriesExist()
+        } catch {
+            return
+        }
+
+        for track in uncachedFavorites {
+            // Yield if bulk download started, or if space ran out
+            guard hasAvailableSpace(), !isDownloading else {
+                print("CacheService: Auto-download stopped — \(isDownloading ? "bulk download started" : "storage limit reached")")
+                break
+            }
+
+            let artist = trackToArtist[track.s3Key]
+            let album = trackToAlbum[track.s3Key]
+            await downloadTrackWithRelatedArtwork(track, artist: artist, album: album)
+        }
+
+        await enforceStorageLimit()
+        print("CacheService: Auto-download complete")
     }
 
     /// Delete a single cached track (used for eviction)

@@ -12,6 +12,7 @@ struct SettingsView: View {
     var musicService: MusicService
 
     @AppStorage("streamingModeEnabled") private var streamingModeEnabled = false
+    @AppStorage("autoDownloadFavoritesEnabled") private var autoDownloadFavoritesEnabled = true
     @AppStorage("autoImageCachingEnabled") private var autoImageCachingEnabled = true
     @AppStorage("maxCacheSizeGB") private var maxCacheSizeGB: Int = 0
     @State private var cdnPrefix: String = NSUbiquitousKeyValueStore.default.string(forKey: "cdnPrefix") ?? MusicService.defaultCDNPrefix
@@ -74,6 +75,19 @@ struct SettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                         .padding(.top, 2)
+
+                    Divider()
+                        .padding(.vertical, 4)
+
+                    Toggle(isOn: $autoDownloadFavoritesEnabled) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Auto-Download Favorites")
+                            Text("Automatically cache favorited songs for offline when streaming")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .toggleStyle(.switch)
 
                     Divider()
                         .padding(.vertical, 4)
@@ -328,6 +342,19 @@ struct SettingsView: View {
                             .multilineTextAlignment(.trailing)
                         Text("GB")
                             .foregroundStyle(.secondary)
+                    }
+
+                    Toggle(isOn: $autoDownloadFavoritesEnabled) {
+                        Label {
+                            VStack(alignment: .leading) {
+                                Text("Auto-Download Favorites")
+                                Text("Automatically cache favorited songs for offline when streaming")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        } icon: {
+                            Image(systemName: "heart.circle")
+                        }
                     }
 
                     Button(role: .destructive) {

@@ -839,6 +839,7 @@ struct AlbumDetailView: View {
                         SongRow.albumTrack(
                             track: track,
                             playerService: playerService,
+                            cacheService: cacheService,
                             musicService: musicService,
                             isPlayable: isPlayable,
                             onNavigate: { pendingNavigation = $0 }

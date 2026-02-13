@@ -84,6 +84,16 @@ struct PlaylistView: View {
 
                 Section("Auto Playlists") {
                     NavigationLink {
+                        DownloadedMusicView(
+                            musicService: musicService,
+                            playerService: playerService,
+                            cacheService: cacheService
+                        )
+                    } label: {
+                        Label("Downloaded", systemImage: "arrow.down.circle")
+                    }
+
+                    NavigationLink {
                         RecentlyAddedView(
                             musicService: musicService,
                             playerService: playerService,
@@ -333,6 +343,76 @@ struct FavoriteTracksView: View {
             }
         }
         .navigationTitle("Favorite Songs")
+        .navigationDestination(item: $pendingNavigation) { destination in
+            switch destination {
+            case .artist(let artist):
+                ArtistDetailView(artist: artist, musicService: musicService, playerService: playerService, cacheService: cacheService)
+            case .album(let album, _):
+                AlbumDetailView(album: album, musicService: musicService, playerService: playerService, cacheService: cacheService)
+            }
+        }
+    }
+}
+
+struct DownloadedMusicView: View {
+    var musicService: MusicService
+    var playerService: PlayerService
+    var cacheService: CacheService?
+
+    @State private var pendingNavigation: NavigationDestination?
+
+    private var downloadedTracks: [Track] {
+        musicService.songs.filter { cacheService?.isTrackCached($0) == true }
+    }
+
+    var body: some View {
+        Group {
+            if downloadedTracks.isEmpty {
+                ContentUnavailableView(
+                    "No Downloaded Songs",
+                    systemImage: "arrow.down.circle",
+                    description: Text("Download songs to listen offline")
+                )
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        Button {
+                            playerService.shufflePlay(queue: downloadedTracks)
+                        } label: {
+                            Label("Shuffle", systemImage: "shuffle")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                        .padding(.horizontal)
+                        .padding(.vertical, 8)
+
+                        Divider()
+
+                        ForEach(downloadedTracks) { track in
+                            Button {
+                                playerService.play(track: track, queue: downloadedTracks)
+                            } label: {
+                                SongRow.songs(
+                                    track: track,
+                                    playerService: playerService,
+                                    cacheService: cacheService,
+                                    musicService: musicService,
+                                    isPlayable: true,
+                                    onNavigate: { pendingNavigation = $0 }
+                                )
+                                .padding(.horizontal)
+                                .padding(.vertical, 8)
+                            }
+                            .buttonStyle(.plain)
+
+                            Divider()
+                                .padding(.leading, 60)
+                        }
+                    }
+                }
+            }
+        }
+        .navigationTitle("Downloaded")
         .navigationDestination(item: $pendingNavigation) { destination in
             switch destination {
             case .artist(let artist):
