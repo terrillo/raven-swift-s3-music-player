@@ -93,7 +93,7 @@ struct ContentView: View {
     var body: some View {
         Group {
             #if os(iOS)
-            if musicService.isLoading || musicService.loadingStage == .failed || (musicService.catalog == nil && musicService.loadingStage == .idle) {
+            if musicService.isLoading || (musicService.loadingStage == .failed && musicService.isEmpty) || (musicService.catalog == nil && musicService.loadingStage == .idle) {
                 CatalogLoadingView(musicService: musicService)
             } else if musicService.isEmpty {
                 emptyStateView
@@ -185,7 +185,7 @@ struct ContentView: View {
                     }
                 }
             } detail: {
-                if musicService.isLoading || musicService.loadingStage == .failed || (musicService.catalog == nil && musicService.loadingStage == .idle) {
+                if musicService.isLoading || (musicService.loadingStage == .failed && musicService.isEmpty) || (musicService.catalog == nil && musicService.loadingStage == .idle) {
                     CatalogLoadingView(musicService: musicService)
                 } else {
                     switch selectedTab {

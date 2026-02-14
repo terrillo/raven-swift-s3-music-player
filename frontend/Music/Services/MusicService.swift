@@ -229,18 +229,35 @@ class MusicService {
             await clearSwiftDataCache()
         }
 
-        // Try loading from SwiftData first
+        // Phase 1: Load from SwiftData
         loadingStage = .checkingLocalCache
         await loadFromSwiftData()
 
-        // Fetch from CDN when force refreshed OR when catalog is empty (first launch)
-        if forceRefresh || (catalog?.artists.isEmpty ?? true) {
+        let hadLocalData = !(catalog?.artists.isEmpty ?? true)
+
+        if hadLocalData && !forceRefresh {
+            // Local data available — show UI immediately, unblock callers
+            loadingStage = .complete
+            isLoading = false
+
+            // Silent non-blocking CDN refresh
+            Task { [weak self] in
+                guard let self else { return }
+                await self.fetchFromCDN()
+                if self.error == nil {
+                    self.invalidateCaches()
+                } else {
+                    // CDN failed but local data is fine — suppress error
+                    self.error = nil
+                }
+            }
+        } else {
+            // No local data or force refresh — show loading screen during CDN fetch
             loadingStage = .fetchingFromCDN
             await fetchFromCDN()
+            loadingStage = error == nil ? .complete : .failed
+            isLoading = false
         }
-
-        loadingStage = error == nil ? .complete : .failed
-        isLoading = false
     }
 
     /// Load catalog from SwiftData
@@ -290,7 +307,6 @@ class MusicService {
                 let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
                 print("⚠️ Catalog not found on CDN (status: \(statusCode)) \(url)")
                 self.error = URLError(.badServerResponse)
-                loadingStage = .failed
                 return
             }
 

@@ -10,6 +10,10 @@ import SwiftData
 
 @main
 struct MusicApp: App {
+    #if os(macOS)
+    @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+    #endif
+
     // Local SwiftData container for all models
     // Catalog syncs via catalog.json on CDN (not CloudKit)
     var sharedModelContainer: ModelContainer = {
@@ -76,4 +80,12 @@ struct MusicApp: App {
         }
         .modelContainer(sharedModelContainer)
     }
+
+    #if os(macOS)
+    final class AppDelegate: NSObject, NSApplicationDelegate {
+        func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+            return true
+        }
+    }
+    #endif
 }
