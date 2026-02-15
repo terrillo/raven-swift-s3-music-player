@@ -177,10 +177,15 @@ struct UploadView: View {
             }
 
             // Progress bar
-            ProgressView(value: uploader.progress.progress)
+            ProgressView(value: uploader.progress.globalProgress)
                 .progressViewStyle(.linear)
 
-            // Current file
+            // File count and current file
+            if uploader.progress.totalFiles > 0 {
+                Text("\(uploader.progress.processedFiles) / \(uploader.progress.totalFiles) files")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             if let currentFile = uploader.progress.currentFile {
                 Text(currentFile)
                     .font(.caption)

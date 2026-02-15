@@ -513,149 +513,153 @@ class MusicUploader {
 
         // Phase: Process files
         progress.phase = .processing
-        var processedTracks: [ProcessedTrack] = []
 
-        // Process new files (upload) with batched progress updates
-        let results = try await withThrowingTaskGroup(of: ProcessedTrack?.self) { group in
-            var submitted = 0
-            var resultsArray: [ProcessedTrack] = []
-            resultsArray.reserveCapacity(preview.newFiles.count)
-            var completedSinceLastUpdate = 0
-            let progressUpdateInterval = 10  // Batch UI updates to reduce main thread contention
+        // Run new file uploads and skipped file processing concurrently —
+        // new files are network-bound while skipped files do local artwork checks
+        async let newFileResults: [ProcessedTrack] = {
+            // Process new files (upload) with batched progress updates
+            return try await withThrowingTaskGroup(of: ProcessedTrack?.self) { group in
+                var submitted = 0
+                var resultsArray: [ProcessedTrack] = []
+                resultsArray.reserveCapacity(preview.newFiles.count)
+                var completedSinceLastUpdate = 0
+                let progressUpdateInterval = 10  // Batch UI updates to reduce main thread contention
 
-            for item in preview.newFiles {
-                // Limit concurrent workers
-                if submitted >= Self.maxConcurrentWorkers {
-                    if let result = try await group.next() {
-                        if let track = result {
-                            resultsArray.append(track)
+                for item in preview.newFiles {
+                    // Limit concurrent workers
+                    if submitted >= Self.maxConcurrentWorkers {
+                        if let result = try await group.next() {
+                            if let track = result {
+                                resultsArray.append(track)
+                            }
+                            completedSinceLastUpdate += 1
+
+                            // Batch progress updates
+                            if completedSinceLastUpdate >= progressUpdateInterval {
+                                let completed = resultsArray.count
+                                await MainActor.run { progress.processedFiles = completed }
+                                completedSinceLastUpdate = 0
+                            }
                         }
-                        completedSinceLastUpdate += 1
+                    }
 
-                        // Batch progress updates
-                        if completedSinceLastUpdate >= progressUpdateInterval {
-                            let completed = resultsArray.count
-                            await MainActor.run { progress.processedFiles = completed }
-                            completedSinceLastUpdate = 0
-                        }
+                    try Task.checkCancellation()
+
+                    group.addTask {
+                        return await self.processFileWithPreview(
+                            previewItem: item,
+                            config: config,
+                            storageService: storageService,
+                            artworkExtractor: artworkExtractor,
+                            audioConverter: audioConverter,
+                            localArtworkCache: localArtworkCache,
+                            existingAddedAtMap: existingAddedAtMap
+                        )
+                    }
+                    submitted += 1
+                }
+
+                // Collect remaining results
+                for try await result in group {
+                    if let track = result {
+                        resultsArray.append(track)
                     }
                 }
 
-                try Task.checkCancellation()
+                // Final progress update
+                await MainActor.run { progress.processedFiles = resultsArray.count }
 
-                group.addTask {
-                    return await self.processFileWithPreview(
-                        previewItem: item,
-                        config: config,
-                        storageService: storageService,
-                        artworkExtractor: artworkExtractor,
-                        audioConverter: audioConverter,
-                        localArtworkCache: localArtworkCache,
-                        existingAddedAtMap: existingAddedAtMap
-                    )
-                }
-                submitted += 1
+                return resultsArray
             }
+        }()
 
-            // Collect remaining results
-            for try await result in group {
-                if let track = result {
-                    resultsArray.append(track)
+        async let skippedFileResults: [ProcessedTrack] = {
+            // Process skipped files in parallel (they're still part of the catalog)
+            // These files already exist on remote — metadata comes from cached preview, just need local art check
+            return await withTaskGroup(of: ProcessedTrack?.self) { group in
+                var submitted = 0
+                var results: [ProcessedTrack] = []
+                results.reserveCapacity(preview.skippedFiles.count)
+
+                for item in preview.skippedFiles {
+                    // Limit concurrency (artwork lookup + upload is I/O heavy)
+                    if submitted >= Self.maxConcurrentMetadataExtractors {
+                        if let result = await group.next(), let track = result {
+                            results.append(track)
+                        }
+                    }
+
+                    group.addTask {
+                        let metadata = item.metadata
+                        let url = "\(config.cdnBaseURL)/\(item.s3Key)"
+
+                        // Preserve existing addedAt or use current date as fallback
+                        let addedAt = existingAddedAtMap[item.s3Key] ?? Date()
+
+                        // Check for local album art (fast filesystem check, no embedded extraction)
+                        var embeddedArtworkUrl: String?
+                        let dirPath = item.fileURL.deletingLastPathComponent().path
+                        let cached = await localArtworkCache.getCachedURL(for: dirPath)
+                        if cached.isCached {
+                            embeddedArtworkUrl = cached.url
+                        } else if let localArt = artworkExtractor.extractFromDirectory(item.fileURL.deletingLastPathComponent()) {
+                            do {
+                                let uploadedUrl = try await storageService.uploadArtworkBytes(
+                                    localArt.data,
+                                    mimeType: localArt.mimeType,
+                                    artist: item.artist,
+                                    album: item.album
+                                )
+                                await localArtworkCache.cacheURL(uploadedUrl, for: dirPath)
+                                embeddedArtworkUrl = uploadedUrl
+                            } catch {
+                                await localArtworkCache.cacheURL(nil, for: dirPath)
+                            }
+                        } else {
+                            await localArtworkCache.cacheURL(nil, for: dirPath)
+                        }
+
+                        return ProcessedTrack(
+                            title: item.title,
+                            artist: metadata.artist ?? item.artist,
+                            album: item.album,
+                            albumArtist: metadata.albumArtist,
+                            trackNumber: metadata.trackNumber,
+                            trackTotal: metadata.trackTotal,
+                            discNumber: metadata.discNumber,
+                            discTotal: metadata.discTotal,
+                            duration: metadata.duration,
+                            year: metadata.year,
+                            genre: metadata.genre,
+                            composer: metadata.composer,
+                            comment: metadata.comment,
+                            bitrate: metadata.bitrate,
+                            samplerate: metadata.samplerate,
+                            channels: metadata.channels,
+                            filesize: metadata.filesize,
+                            format: item.format,
+                            s3Key: item.s3Key,
+                            url: url,
+                            embeddedArtworkUrl: embeddedArtworkUrl,
+                            originalFormat: item.needsConversion ? item.fileURL.pathExtension.lowercased() : nil,
+                            addedAt: addedAt
+                        )
+                    }
+                    submitted += 1
                 }
-            }
 
-            // Final progress update
-            await MainActor.run { progress.processedFiles = resultsArray.count }
-
-            return resultsArray
-        }
-
-        processedTracks = results
-
-        // Process skipped files in parallel (they're still part of the catalog)
-        // These files already exist on remote — metadata comes from cached preview, just need local art check
-        let skippedTracks = await withTaskGroup(of: ProcessedTrack?.self) { group in
-            var submitted = 0
-            var results: [ProcessedTrack] = []
-            results.reserveCapacity(preview.skippedFiles.count)
-
-            for item in preview.skippedFiles {
-                // Limit concurrency (artwork lookup + upload is I/O heavy)
-                if submitted >= Self.maxConcurrentMetadataExtractors {
-                    if let result = await group.next(), let track = result {
+                // Collect remaining
+                for await result in group {
+                    if let track = result {
                         results.append(track)
                     }
                 }
-
-                group.addTask {
-                    let metadata = item.metadata
-                    let url = "\(config.cdnBaseURL)/\(item.s3Key)"
-
-                    // Preserve existing addedAt or use current date as fallback
-                    let addedAt = existingAddedAtMap[item.s3Key] ?? Date()
-
-                    // Check for local album art (fast filesystem check, no embedded extraction)
-                    var embeddedArtworkUrl: String?
-                    let dirPath = item.fileURL.deletingLastPathComponent().path
-                    let cached = await localArtworkCache.getCachedURL(for: dirPath)
-                    if cached.isCached {
-                        embeddedArtworkUrl = cached.url
-                    } else if let localArt = artworkExtractor.extractFromDirectory(item.fileURL.deletingLastPathComponent()) {
-                        do {
-                            let uploadedUrl = try await storageService.uploadArtworkBytes(
-                                localArt.data,
-                                mimeType: localArt.mimeType,
-                                artist: item.artist,
-                                album: item.album
-                            )
-                            await localArtworkCache.cacheURL(uploadedUrl, for: dirPath)
-                            embeddedArtworkUrl = uploadedUrl
-                        } catch {
-                            await localArtworkCache.cacheURL(nil, for: dirPath)
-                        }
-                    } else {
-                        await localArtworkCache.cacheURL(nil, for: dirPath)
-                    }
-
-                    return ProcessedTrack(
-                        title: item.title,
-                        artist: metadata.artist ?? item.artist,
-                        album: item.album,
-                        albumArtist: metadata.albumArtist,
-                        trackNumber: metadata.trackNumber,
-                        trackTotal: metadata.trackTotal,
-                        discNumber: metadata.discNumber,
-                        discTotal: metadata.discTotal,
-                        duration: metadata.duration,
-                        year: metadata.year,
-                        genre: metadata.genre,
-                        composer: metadata.composer,
-                        comment: metadata.comment,
-                        bitrate: metadata.bitrate,
-                        samplerate: metadata.samplerate,
-                        channels: metadata.channels,
-                        filesize: metadata.filesize,
-                        format: item.format,
-                        s3Key: item.s3Key,
-                        url: url,
-                        embeddedArtworkUrl: embeddedArtworkUrl,
-                        originalFormat: item.needsConversion ? item.fileURL.pathExtension.lowercased() : nil,
-                        addedAt: addedAt
-                    )
-                }
-                submitted += 1
+                return results
             }
+        }()
 
-            // Collect remaining
-            for await result in group {
-                if let track = result {
-                    results.append(track)
-                }
-            }
-            return results
-        }
-
-        processedTracks.append(contentsOf: skippedTracks)
+        let (newTracks, skippedTracks) = try await (newFileResults, skippedFileResults)
+        let processedTracks = newTracks + skippedTracks
 
         try Task.checkCancellation()
 
@@ -930,7 +934,7 @@ class MusicUploader {
         progress.currentFile = "Deleting old catalog…"
 
         // Save to SwiftData in batches to avoid overwhelming SQLite with 12k+ records
-        let batchSize = 50
+        let batchSize = 200
 
         // Phase 1: Delete existing records (separate transaction)
         try await Task.detached {
