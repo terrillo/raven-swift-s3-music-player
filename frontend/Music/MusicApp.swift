@@ -41,9 +41,9 @@ struct MusicApp: App {
             if let appSupportURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
                 let storeURL = appSupportURL.appendingPathComponent("default.store")
                 try? FileManager.default.removeItem(at: storeURL)
-                // Also remove WAL/SHM files
-                try? FileManager.default.removeItem(at: storeURL.appendingPathExtension("wal"))
-                try? FileManager.default.removeItem(at: storeURL.appendingPathExtension("shm"))
+                // Also remove WAL/SHM files (SQLite uses hyphen, not dot extension)
+                try? FileManager.default.removeItem(at: URL(fileURLWithPath: storeURL.path + "-wal"))
+                try? FileManager.default.removeItem(at: URL(fileURLWithPath: storeURL.path + "-shm"))
 
                 if let retryContainer = try? ModelContainer(for: schema, configurations: [config]) {
                     print("Successfully recreated ModelContainer after deleting corrupt store")
