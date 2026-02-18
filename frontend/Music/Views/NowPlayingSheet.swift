@@ -21,6 +21,8 @@ struct NowPlayingSheet: View {
     var playerService: PlayerService
     var musicService: MusicService
     var cacheService: CacheService?
+    var onNavigate: ((NavigationDestination) -> Void)? = nil
+    var onDismiss: (() -> Void)? = nil
 
     @State private var artworkColor: Color = Color(white: 0.3)
     @State private var selectedSegment: QueueSegment = .playing
@@ -179,11 +181,21 @@ struct NowPlayingSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button {
-                        dismiss()
+                        if let onDismiss {
+                            onDismiss()
+                        } else {
+                            dismiss()
+                        }
                     } label: {
+                        #if os(macOS)
+                        Image(systemName: "sidebar.trailing")
+                            .font(.title3)
+                            .foregroundStyle(artworkColor.labelPrimary)
+                        #else
                         Image(systemName: "chevron.down")
                             .font(.title3)
                             .foregroundStyle(artworkColor.labelPrimary)
+                        #endif
                     }
                 }
             }
@@ -274,32 +286,6 @@ struct NowPlayingSheet: View {
                         .lineLimit(1)
 
                     if let track = playerService.currentTrack {
-                        // Add to Playlist menu
-                        Menu {
-                            ForEach(PlaylistStore.shared.playlists, id: \.id) { playlist in
-                                Button {
-                                    PlaylistStore.shared.addTrack(track, to: playlist)
-                                } label: {
-                                    Label(playlist.name ?? "Untitled", systemImage: "music.note.list")
-                                }
-                            }
-
-                            if !PlaylistStore.shared.playlists.isEmpty {
-                                Divider()
-                            }
-
-                            Button {
-                                trackForNewPlaylist = track
-                                showingCreatePlaylist = true
-                            } label: {
-                                Label("New Playlist...", systemImage: "plus")
-                            }
-                        } label: {
-                            Image(systemName: "text.badge.plus")
-                                .font(.title2)
-                                .foregroundStyle(artworkColor.contrastingForeground)
-                        }
-
                         // Favorite button
                         Button {
                             FavoritesStore.shared.toggleTrackFavorite(track)
@@ -314,15 +300,27 @@ struct NowPlayingSheet: View {
 
                 // Artist button -> navigates to ArtistDetailView
                 if let artist = currentArtist {
-                    NavigationLink {
-                        ArtistDetailView(artist: artist, musicService: musicService, playerService: playerService, cacheService: cacheService)
-                    } label: {
-                        Text(artist.name)
-                            .font(.title3)
-                            .foregroundStyle(artworkColor.contrastingForeground)
-                            .lineLimit(1)
+                    if let onNavigate {
+                        Button {
+                            onNavigate(.artist(artist))
+                        } label: {
+                            Text(artist.name)
+                                .font(.title3)
+                                .foregroundStyle(artworkColor.contrastingForeground)
+                                .lineLimit(1)
+                        }
+                        .buttonStyle(.plain)
+                    } else {
+                        NavigationLink {
+                            ArtistDetailView(artist: artist, musicService: musicService, playerService: playerService, cacheService: cacheService)
+                        } label: {
+                            Text(artist.name)
+                                .font(.title3)
+                                .foregroundStyle(artworkColor.contrastingForeground)
+                                .lineLimit(1)
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
                 } else if let artistName = playerService.currentTrack?.albumArtist ?? playerService.currentTrack?.artist {
                     Text(artistName)
                         .font(.title3)
@@ -332,15 +330,27 @@ struct NowPlayingSheet: View {
 
                 // Album button -> navigates to AlbumDetailView
                 if let album = currentAlbumObject {
-                    NavigationLink {
-                        AlbumDetailView(album: album, musicService: musicService, playerService: playerService, cacheService: cacheService)
-                    } label: {
-                        Text(album.name)
-                            .font(.subheadline)
-                            .foregroundStyle(artworkColor.contrastingSecondary)
-                            .lineLimit(1)
+                    if let onNavigate {
+                        Button {
+                            onNavigate(.album(album, currentArtist))
+                        } label: {
+                            Text(album.name)
+                                .font(.subheadline)
+                                .foregroundStyle(artworkColor.contrastingSecondary)
+                                .lineLimit(1)
+                        }
+                        .buttonStyle(.plain)
+                    } else {
+                        NavigationLink {
+                            AlbumDetailView(album: album, musicService: musicService, playerService: playerService, cacheService: cacheService)
+                        } label: {
+                            Text(album.name)
+                                .font(.subheadline)
+                                .foregroundStyle(artworkColor.contrastingSecondary)
+                                .lineLimit(1)
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
                 } else if let albumName = playerService.currentTrack?.album {
                     Text(albumName)
                         .font(.subheadline)
@@ -449,7 +459,7 @@ struct NowPlayingSheet: View {
                 .buttonStyle(.plain)
             }
 
-            // Shuffle & Repeat Controls
+            // Shuffle, Playlist & Repeat Controls
             HStack(spacing: 40) {
                 // Shuffle
                 Button {
@@ -469,6 +479,37 @@ struct NowPlayingSheet: View {
                 }
                 .accessibilityLabel(playerService.isShuffled ? "Shuffle on" : "Shuffle off")
                 .buttonStyle(.plain)
+
+                // Add to Playlist
+                if let track = playerService.currentTrack {
+                    Menu {
+                        ForEach(PlaylistStore.shared.playlists, id: \.id) { playlist in
+                            Button {
+                                PlaylistStore.shared.addTrack(track, to: playlist)
+                            } label: {
+                                Label(playlist.name ?? "Untitled", systemImage: "music.note.list")
+                            }
+                        }
+
+                        if !PlaylistStore.shared.playlists.isEmpty {
+                            Divider()
+                        }
+
+                        Button {
+                            trackForNewPlaylist = track
+                            showingCreatePlaylist = true
+                        } label: {
+                            Label("New Playlist...", systemImage: "plus")
+                        }
+                    } label: {
+                        Image(systemName: "text.badge.plus")
+                            .font(.title3)
+                            .fontWeight(.semibold)
+                            .foregroundStyle(artworkColor.contrastingSecondary)
+                            .frame(width: 36, height: 36)
+                    }
+                    .accessibilityLabel("Add to playlist")
+                }
 
                 // Repeat
                 Button {

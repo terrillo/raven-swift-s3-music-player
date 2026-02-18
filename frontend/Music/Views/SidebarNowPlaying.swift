@@ -19,7 +19,7 @@ struct SidebarNowPlaying: View {
 
                 // Track info row (tappable to open player)
                 Button {
-                    showingPlayer = true
+                    showingPlayer.toggle()
                 } label: {
                     HStack(spacing: 10) {
                         // Album artwork

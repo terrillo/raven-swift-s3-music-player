@@ -9,9 +9,7 @@ import SwiftUI
 import SwiftData
 
 enum Tab: String, CaseIterable {
-    #if os(iOS)
     case home = "Home"
-    #endif
     case artists = "Artists"
     case songs = "Songs"
     case playlists = "Playlists"
@@ -25,9 +23,7 @@ enum Tab: String, CaseIterable {
 
     var icon: String {
         switch self {
-        #if os(iOS)
         case .home: return "house.fill"
-        #endif
         case .artists: return "person.3.sequence.fill"
         case .songs: return "music.note"
         case .playlists: return "music.note.square.stack"
@@ -45,11 +41,7 @@ enum Tab: String, CaseIterable {
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.scenePhase) private var scenePhase
-    #if os(iOS)
     @State private var selectedTab: Tab = .home
-    #else
-    @State private var selectedTab: Tab = .artists
-    #endif
     @State private var showingSearch = false
     @State private var showingPlayer = false
     @State private var showingSettings = false
@@ -189,6 +181,18 @@ struct ContentView: View {
                     CatalogLoadingView(musicService: musicService)
                 } else {
                     switch selectedTab {
+                    case .home:
+                        if musicService.isEmpty {
+                            emptyStateView
+                        } else {
+                            HomeView(
+                                showingSearch: $showingSearch,
+                                showingSettings: $showingSettings,
+                                musicService: musicService,
+                                playerService: playerService,
+                                cacheService: cacheService
+                            )
+                        }
                     case .artists:
                         if musicService.isEmpty {
                             emptyStateView
@@ -232,15 +236,44 @@ struct ContentView: View {
                     }
                 }
             }
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    if playerService.hasTrack {
+                        Button {
+                            showingPlayer.toggle()
+                        } label: {
+                            Image(systemName: showingPlayer ? "play.circle.fill" : "play.circle")
+                        }
+                        .help(showingPlayer ? "Hide Now Playing" : "Show Now Playing")
+                    }
+                }
+            }
             .onChange(of: showingSearch) { _, newValue in
                 if newValue {
                     selectedTab = .search
                     showingSearch = false
                 }
             }
-            .sheet(isPresented: $showingPlayer) {
-                NowPlayingSheet(playerService: playerService, musicService: musicService, cacheService: cacheService)
-                    .frame(minWidth: 400, minHeight: 600)
+            .onChange(of: showingSettings) { _, newValue in
+                if newValue {
+                    selectedTab = .settings
+                    showingSettings = false
+                }
+            }
+            .inspector(isPresented: $showingPlayer) {
+                NowPlayingSheet(
+                    playerService: playerService,
+                    musicService: musicService,
+                    cacheService: cacheService,
+                    onNavigate: { destination in
+                        selectedTab = .artists
+                        pendingNavigation = destination
+                    },
+                    onDismiss: {
+                        showingPlayer = false
+                    }
+                )
+                .inspectorColumnWidth(min: 340, ideal: 380, max: 440)
             }
             #endif
         }
@@ -265,19 +298,7 @@ struct ContentView: View {
             }
         }
         .onChange(of: scenePhase) { _, newPhase in
-            if newPhase == .active {
-                // Only reload if stale (>5 min since last update)
-                let isStale = musicService.lastUpdated.map { Date().timeIntervalSince($0) > 300 } ?? true
-                if isStale {
-                    Task {
-                        await musicService.loadCatalog()
-                        // Prefetch artwork after stale catalog reload
-                        if !musicService.isEmpty {
-                            cacheService?.prefetchAllArtwork(urls: musicService.allArtworkUrls)
-                        }
-                    }
-                }
-            } else if newPhase == .background || newPhase == .inactive {
+            if newPhase == .background || newPhase == .inactive {
                 playerService.savePlaybackState()
             }
         }

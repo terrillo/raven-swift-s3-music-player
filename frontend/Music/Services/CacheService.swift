@@ -506,7 +506,6 @@ class CacheService {
             await downloadTrackWithRelatedArtwork(track, artist: artist, album: album)
         }
 
-        await enforceStorageLimit()
         print("CacheService: Auto-download complete")
     }
 
@@ -692,9 +691,6 @@ class CacheService {
                     }
                 }
             }
-
-            // Enforce storage limit once after all downloads complete
-            await enforceStorageLimit()
 
         } catch {
             self.error = error.localizedDescription

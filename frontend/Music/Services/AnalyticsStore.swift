@@ -177,6 +177,30 @@ class AnalyticsStore {
         return (try? viewContext.fetch(request)) ?? []
     }
 
+    // MARK: - Recently Played
+
+    /// Returns unique recently played track keys with their most recent play date.
+    /// Deduplicates by s3Key, keeping the most recent play event for each track.
+    /// Results are sorted newest-first. Pass `limit: 0` for no limit.
+    func fetchRecentlyPlayedTracks(limit: Int = 0) -> [(s3Key: String, playedAt: Date)] {
+        let request = NSFetchRequest<PlayEventEntity>(entityName: "PlayEventEntity")
+        request.sortDescriptors = [NSSortDescriptor(keyPath: \PlayEventEntity.playedAt, ascending: false)]
+
+        guard let events = try? viewContext.fetch(request) else { return [] }
+
+        var seen = Set<String>()
+        var result: [(s3Key: String, playedAt: Date)] = []
+        for event in events {
+            guard let s3Key = event.trackS3Key,
+                  let playedAt = event.playedAt,
+                  !seen.contains(s3Key) else { continue }
+            seen.insert(s3Key)
+            result.append((s3Key: s3Key, playedAt: playedAt))
+            if limit > 0 && result.count >= limit { break }
+        }
+        return result
+    }
+
     // MARK: - Statistics Methods
 
     func fetchTotalListeningTime(period: TimePeriod = .allTime) -> TimeInterval {

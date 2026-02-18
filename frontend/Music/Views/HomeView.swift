@@ -7,7 +7,6 @@
 
 import SwiftUI
 
-#if os(iOS)
 struct HomeView: View {
     @Binding var showingSearch: Bool
     @Binding var showingSettings: Bool
@@ -17,6 +16,7 @@ struct HomeView: View {
 
     @State private var navigationPath = NavigationPath()
     @State private var cachedTopTracks: [(track: Track, playCount: Int)] = []
+    @State private var cachedRecentlyPlayed: [(track: Track, playedAt: Date)] = []
     @State private var cachedTopGenres: [String] = []
 
     var body: some View {
@@ -24,21 +24,19 @@ struct HomeView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
                     topTracksSection
+                    recentlyPlayedSection
                     recentlyAddedSection
                     genreBrowseSection
                 }
                 .padding()
             }
-            .refreshable {
-                await musicService.loadCatalog(forceRefresh: true)
-                updateTopTracks()
-                updateTopGenres()
-            }
             .task {
                 if cachedTopTracks.isEmpty { updateTopTracks() }
+                if cachedRecentlyPlayed.isEmpty { updateRecentlyPlayed() }
                 if cachedTopGenres.isEmpty { updateTopGenres() }
             }
             .navigationTitle("Home")
+            #if os(iOS)
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     HStack(spacing: 16) {
@@ -56,6 +54,7 @@ struct HomeView: View {
                     }
                 }
             }
+            #endif
             .navigationDestination(for: NavigationDestination.self) { destination in
                 switch destination {
                 case .artist(let artist):
@@ -136,6 +135,71 @@ struct HomeView: View {
         cachedTopTracks = data.compactMap { (s3Key, count) in
             guard let track = musicService.trackByS3Key[s3Key] else { return nil }
             return (track: track, playCount: count)
+        }
+    }
+
+    // MARK: - Recently Played Section
+
+    private var recentlyPlayedSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Recently Played")
+                    .font(.title2)
+                    .fontWeight(.bold)
+                Spacer()
+                NavigationLink {
+                    RecentlyPlayedView(
+                        musicService: musicService,
+                        playerService: playerService,
+                        cacheService: cacheService
+                    )
+                } label: {
+                    Text("See All")
+                        .font(.subheadline)
+                }
+            }
+
+            if cachedRecentlyPlayed.isEmpty {
+                Text("Play some music to see your history")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, 8)
+            } else {
+                ForEach(Array(cachedRecentlyPlayed.prefix(5).enumerated()), id: \.element.track.s3Key) { index, item in
+                    let isPlayable = playerService.isTrackPlayable(item.track)
+                    Button {
+                        if isPlayable {
+                            let tracks = cachedRecentlyPlayed.map { $0.track }
+                            playerService.play(track: item.track, queue: tracks)
+                        }
+                    } label: {
+                        SongRow.recentlyPlayed(
+                            track: item.track,
+                            playedAt: item.playedAt,
+                            playerService: playerService,
+                            cacheService: cacheService,
+                            musicService: musicService,
+                            isPlayable: isPlayable,
+                            onNavigate: navigate
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!isPlayable)
+
+                    if index < min(cachedRecentlyPlayed.count, 5) - 1 {
+                        Divider()
+                            .padding(.leading, 60)
+                    }
+                }
+            }
+        }
+    }
+
+    private func updateRecentlyPlayed() {
+        let data = AnalyticsStore.shared.fetchRecentlyPlayedTracks(limit: 5)
+        cachedRecentlyPlayed = data.compactMap { (s3Key, playedAt) in
+            guard let track = musicService.trackByS3Key[s3Key] else { return nil }
+            return (track: track, playedAt: playedAt)
         }
     }
 
@@ -226,11 +290,15 @@ struct HomeView: View {
                                     .padding(.horizontal, 16)
                                     .padding(.vertical, 10)
                                     .background {
+                                        #if os(iOS)
                                         if #available(iOS 26.0, *) {
                                             Capsule().glassEffect(.regular.interactive())
                                         } else {
                                             Capsule().fill(.ultraThinMaterial)
                                         }
+                                        #else
+                                        Capsule().fill(.ultraThinMaterial)
+                                        #endif
                                     }
                             }
                             .buttonStyle(.plain)
@@ -265,4 +333,3 @@ struct HomeView: View {
         playerService: PlayerService()
     )
 }
-#endif

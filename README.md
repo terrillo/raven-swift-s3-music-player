@@ -17,6 +17,7 @@ A unified Swift music app for iOS and macOS with native upload capabilities. Hos
 - Seekable progress bar with time display
 - Background audio playback continues when app is minimized
 - System Now Playing integration (lock screen, Control Center, headphone controls)
+- macOS: Non-modal inspector panel for Now Playing — stays open while browsing, with artist/album navigation to main content
 
 ### Smart Shuffle
 Intelligent shuffle that learns your listening habits:
@@ -86,7 +87,7 @@ Intelligent shuffle that learns your listening habits:
 
 ### Platform-Specific
 - **iOS**: HomeView as primary landing screen, 5-tab navigation (Home, Songs, Artists, Playlists, Radio), iOS 18 tab bar mini-player, iOS 26 Liquid Glass design
-- **macOS**: NavigationSplitView with three-column layout, sidebar player, dedicated Upload and Settings tabs
+- **macOS**: NavigationSplitView with sidebar, Now Playing inspector panel (non-modal, stays open during navigation), toolbar toggle button, dedicated Upload and Settings tabs
 - View mode preferences (grid/list) persist via `@AppStorage`
 
 ## Prerequisites
@@ -233,10 +234,10 @@ Music/
 │       │   ├── AddTracksSheet.swift              # Add tracks to playlist
 │       │   ├── PlaylistRecommendationsSheet.swift  # AI-suggested tracks
 │       │   ├── RadioView.swift                   # Radio mode
-│       │   ├── NowPlayingSheet.swift             # Full-screen player
+│       │   ├── NowPlayingSheet.swift             # Now Playing (iOS sheet / macOS inspector panel)
 │       │   ├── NowPlayingAccessory.swift         # iOS 18 tab bar mini-player
 │       │   ├── NowPlayingDetailView.swift        # Expanded Now Playing info
-│       │   ├── SidebarNowPlaying.swift           # macOS sidebar player
+│       │   ├── SidebarNowPlaying.swift           # macOS sidebar mini-player (toggles inspector)
 │       │   ├── QueueListView.swift               # Queue display
 │       │   ├── CacheDownloadView.swift           # Download progress
 │       │   ├── CatalogLoadingView.swift          # Catalog loading state

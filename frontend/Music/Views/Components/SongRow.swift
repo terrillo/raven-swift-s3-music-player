@@ -17,6 +17,7 @@ enum SongRowLeadingStyle {
 enum SongRowSubtitleStyle {
     case albumName                         // Show artist + album
     case relativeDate                      // Show artist + relative date
+    case relativeTime(Date)                // Show artist + relative time from explicit date
     case playCount(Int)                    // Show artist + play count
     case artistOnly                        // Just artist, no second line
 }
@@ -294,6 +295,18 @@ struct SongRow: View {
             .foregroundStyle(secondaryColor)
             .lineLimit(1)
 
+        case .relativeTime(let date):
+            HStack(spacing: 4) {
+                if let artist = track.artist {
+                    Text(artist)
+                    Text("•")
+                }
+                Text(Self.relativeDateFormatter.localizedString(for: date, relativeTo: Date()))
+            }
+            .font(.caption)
+            .foregroundStyle(secondaryColor)
+            .lineLimit(1)
+
         case .playCount(let count):
             HStack(spacing: 4) {
                 if let artist = track.artist {
@@ -440,6 +453,32 @@ extension SongRow {
             track: track,
             leadingStyle: .artwork,
             subtitleStyle: .relativeDate,
+            showFavoriteButton: true,
+            showDownloadIcon: true,
+            playerService: playerService,
+            cacheService: cacheService,
+            musicService: musicService,
+            isPlayable: isPlayable,
+            onNavigate: onNavigate,
+            onCreatePlaylist: onCreatePlaylist
+        )
+    }
+
+    /// Recently played playlist
+    static func recentlyPlayed(
+        track: Track,
+        playedAt: Date,
+        playerService: PlayerService,
+        cacheService: CacheService?,
+        musicService: MusicService? = nil,
+        isPlayable: Bool = true,
+        onNavigate: ((NavigationDestination) -> Void)? = nil,
+        onCreatePlaylist: ((Track) -> Void)? = nil
+    ) -> SongRow {
+        SongRow(
+            track: track,
+            leadingStyle: .artwork,
+            subtitleStyle: .relativeTime(playedAt),
             showFavoriteButton: true,
             showDownloadIcon: true,
             playerService: playerService,

@@ -236,21 +236,10 @@ class MusicService {
         let hadLocalData = !(catalog?.artists.isEmpty ?? true)
 
         if hadLocalData && !forceRefresh {
-            // Local data available — show UI immediately, unblock callers
+            // Local data available — show UI immediately
+            // CDN fetch only happens via manual sync (forceRefresh: true)
             loadingStage = .complete
             isLoading = false
-
-            // Silent non-blocking CDN refresh
-            Task { [weak self] in
-                guard let self else { return }
-                await self.fetchFromCDN()
-                if self.error == nil {
-                    self.invalidateCaches()
-                } else {
-                    // CDN failed but local data is fine — suppress error
-                    self.error = nil
-                }
-            }
         } else {
             // No local data or force refresh — show loading screen during CDN fetch
             loadingStage = .fetchingFromCDN

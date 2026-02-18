@@ -66,9 +66,9 @@ frontend/Music/
 │   ├── SearchView.swift                  # Global search
 │   ├── PlaylistView.swift                # Auto-generated playlists
 │   ├── RadioView.swift                   # Radio mode with seed selection
-│   ├── NowPlayingSheet.swift             # Full-screen player
+│   ├── NowPlayingSheet.swift             # Now Playing (iOS sheet / macOS inspector panel)
 │   ├── NowPlayingAccessory.swift         # iOS 18 tab bar mini-player
-│   ├── SidebarNowPlaying.swift           # macOS sidebar player
+│   ├── SidebarNowPlaying.swift           # macOS sidebar mini-player (toggles inspector)
 │   ├── QueueListView.swift               # Queue display
 │   ├── CacheDownloadView.swift           # Download progress
 │   ├── SettingsView.swift                # Settings & cache management
@@ -104,7 +104,7 @@ struct MusicCatalog, Artist, Album, Track  // For JSON serialization
 
 ### Services
 
-**MusicService** - Loads catalog from SwiftData, fetches from CDN if local database is empty. Syncs iCloud Key-Value settings on each load to discover CDN configuration set by macOS uploader. SwiftData persistence runs on a background `ModelContext` via `Task.detached` to avoid blocking UI during catalog refresh.
+**MusicService** - Local-first catalog loading: loads from SwiftData and shows UI immediately if local data exists. CDN fetch only happens when no local data exists (first launch) or on explicit user-initiated sync (`forceRefresh: true`). Syncs iCloud Key-Value settings on each load to discover CDN configuration set by macOS uploader. SwiftData persistence runs on a background `ModelContext` via `Task.detached` to avoid blocking UI during catalog refresh.
 
 **PlayerService** - AVPlayer-based playback with system Now Playing integration, queue management, and session tracking for smart shuffle.
 
@@ -167,7 +167,9 @@ The `Services/Upload/` directory contains the complete upload pipeline:
 - `@AppStorage` for view preferences (grid/list mode)
 - Tab bar uses `.tabViewBottomAccessory` for Now Playing (iOS 18+)
 - iOS 26 Liquid Glass: `.glassEffect(.regular.interactive())` with `.ultraThinMaterial` fallback
-- macOS sidebar uses `.safeAreaInset(edge: .bottom)` for Now Playing
+- macOS Now Playing uses `.inspector()` trailing panel (non-modal, stays open during navigation)
+- macOS sidebar uses `.safeAreaInset(edge: .bottom)` for Now Playing widget (toggles inspector)
+- `NowPlayingSheet` accepts optional `onNavigate` and `onDismiss` closures for macOS inspector integration
 
 ### Background Threading Patterns
 
@@ -190,6 +192,17 @@ iOS uses a 5-tab layout with HomeView as the primary landing screen:
 - **Radio**: Radio mode with genre/mood/artist seeds
 
 Settings is accessible via the cloud icon in HomeView's toolbar (opens as a sheet).
+
+### macOS Layout
+
+macOS uses a `NavigationSplitView` with sidebar tabs: Home, Artists, Songs, Playlists, Radio, Genres, Search, Upload, Cloud (settings).
+
+**Now Playing Inspector**: The macOS Now Playing experience uses `.inspector()` — a non-modal trailing panel (like Xcode's inspector) that stays open while you interact with the main content. Key behaviors:
+- **SidebarNowPlaying** widget at the bottom of the sidebar toggles the inspector open/closed
+- Toolbar button (`play.circle`) in the main window also toggles the inspector
+- Artist/album name taps in the inspector route navigation to the main content area (ArtistsView) via `pendingNavigation`, keeping the inspector open
+- `NowPlayingSheet` uses `onNavigate` callback (macOS) instead of `NavigationLink` (iOS) to avoid navigating inside the panel
+- `onDismiss` callback directly sets `showingPlayer = false` since `@Environment(\.dismiss)` is unreliable inside inspectors
 
 ### Playback Behavior
 
@@ -237,11 +250,11 @@ iOS reads these settings to construct the catalog URL: `{cdnBaseURL}/{cdnPrefix}
 
 ### Sync Triggers
 
-The catalog refreshes in these scenarios:
+The catalog loading is **local-first** — if SwiftData has data, the app shows it immediately without any CDN fetch. CDN fetches only happen when explicitly needed:
 
-1. **App launch** - Syncs iCloud settings, loads from SwiftData, fetches from CDN if empty
-2. **Foreground return** - `scenePhase` changes to `.active` triggers reload
-3. **Manual refresh** - Refresh button in empty state or macOS sidebar
+1. **App launch (no local data)** - Syncs iCloud settings, loads from SwiftData, fetches from CDN only if SwiftData is empty
+2. **App launch (local data exists)** - Loads from SwiftData and displays immediately, no CDN fetch
+3. **Manual sync** - Settings "Sync Catalog" button or CatalogLoadingView "Try Again" (`forceRefresh: true`)
 4. **After upload** - macOS immediately updates local SwiftData
 
 ### Settings (iOS)
@@ -260,6 +273,7 @@ The Settings view shows a "CDN Prefix" field that displays the current prefix sy
 | Search | Yes | Yes |
 | Favorites | Yes | Yes |
 | Statistics | Yes | Yes |
+| Now Playing | Sheet | Inspector panel |
 | Catalog Sync | Receive | Send |
 
 ## Upload Workflow (macOS)
@@ -310,12 +324,14 @@ Cached files use dynamic `isExcludedFromBackup` based on user settings:
 | `maxCacheSizeGB` | `0` (unlimited) | Tracks: included in backups (forever cache) |
 | `maxCacheSizeGB` | `> 0` (limited) | Tracks: excluded from backups (purgeable) |
 | `autoImageCachingEnabled` | `true` | Artwork: included in backups (forever cache) |
-| `autoImageCachingEnabled` | `false` | Artwork: excluded from backups + cache cleared |
+| `autoImageCachingEnabled` | `false` | Artwork: excluded from backups (existing artwork preserved, future downloads stopped) |
 
 - `CacheService.shouldPersistTracks` / `shouldPersistArtwork` compute the backup flag
 - `updateTrackBackupExclusion()` / `updateArtworkBackupExclusion()` collect filenames on MainActor, then bulk-update `setResourceValues()` in `Task.detached`
 - Both run during background file validation on every app launch for consistency
-- `SettingsView` has `.onChange` handlers that trigger updates (or clear artwork cache) when settings change
+- `SettingsView` has `.onChange` handlers that trigger backup exclusion updates when settings change
+- Cache clearing is always manual — toggling `autoImageCachingEnabled` off only stops future downloads and updates backup flags, it does not auto-clear existing artwork
+- `CacheService.enforceStorageLimit()` exists but is not called — cache eviction is manual only via Settings buttons
 
 ## CDN URL
 

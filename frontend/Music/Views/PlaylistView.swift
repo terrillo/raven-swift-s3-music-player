@@ -94,6 +94,16 @@ struct PlaylistView: View {
                     }
 
                     NavigationLink {
+                        RecentlyPlayedView(
+                            musicService: musicService,
+                            playerService: playerService,
+                            cacheService: cacheService
+                        )
+                    } label: {
+                        Label("Recently Played", systemImage: "clock.fill")
+                    }
+
+                    NavigationLink {
                         RecentlyAddedView(
                             musicService: musicService,
                             playerService: playerService,
@@ -504,6 +514,100 @@ struct RecentlyAddedView: View {
             case .album(let album, _):
                 AlbumDetailView(album: album, musicService: musicService, playerService: playerService, cacheService: cacheService)
             }
+        }
+    }
+}
+
+struct RecentlyPlayedView: View {
+    var musicService: MusicService
+    var playerService: PlayerService
+    var cacheService: CacheService?
+
+    @State private var pendingNavigation: NavigationDestination?
+    @State private var recentlyPlayed: [(track: Track, playedAt: Date)] = []
+
+    private var tracks: [Track] {
+        recentlyPlayed.map { $0.track }
+    }
+
+    private var firstPlayableTrack: Track? {
+        tracks.first { playerService.isTrackPlayable($0) }
+    }
+
+    private var hasPlayableTracks: Bool {
+        firstPlayableTrack != nil
+    }
+
+    var body: some View {
+        Group {
+            if recentlyPlayed.isEmpty {
+                ContentUnavailableView(
+                    "No Play History",
+                    systemImage: "clock",
+                    description: Text("Songs you play will appear here")
+                )
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        Button {
+                            playerService.shufflePlay(queue: tracks)
+                        } label: {
+                            Label("Shuffle", systemImage: "shuffle")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(!hasPlayableTracks)
+                        .padding(.horizontal)
+                        .padding(.vertical, 8)
+
+                        Divider()
+
+                        ForEach(Array(recentlyPlayed.enumerated()), id: \.element.track.s3Key) { index, item in
+                            let isPlayable = playerService.isTrackPlayable(item.track)
+                            Button {
+                                if isPlayable {
+                                    playerService.play(track: item.track, queue: tracks)
+                                }
+                            } label: {
+                                SongRow.recentlyPlayed(
+                                    track: item.track,
+                                    playedAt: item.playedAt,
+                                    playerService: playerService,
+                                    cacheService: cacheService,
+                                    musicService: musicService,
+                                    isPlayable: isPlayable,
+                                    onNavigate: { pendingNavigation = $0 }
+                                )
+                                .padding(.horizontal)
+                                .padding(.vertical, 8)
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(!isPlayable)
+
+                            Divider()
+                                .padding(.leading, 60)
+                        }
+                    }
+                }
+            }
+        }
+        .navigationTitle("Recently Played")
+        .task { loadRecentlyPlayed() }
+        .navigationDestination(item: $pendingNavigation) { destination in
+            switch destination {
+            case .artist(let artist):
+                ArtistDetailView(artist: artist, musicService: musicService, playerService: playerService, cacheService: cacheService)
+            case .album(let album, _):
+                AlbumDetailView(album: album, musicService: musicService, playerService: playerService, cacheService: cacheService)
+            }
+        }
+    }
+
+    private func loadRecentlyPlayed() {
+        let data = AnalyticsStore.shared.fetchRecentlyPlayedTracks()
+        recentlyPlayed = data.compactMap { (s3Key, playedAt) in
+            guard let track = musicService.trackByS3Key[s3Key] else { return nil }
+            return (track: track, playedAt: playedAt)
         }
     }
 }

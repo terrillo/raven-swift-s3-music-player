@@ -251,12 +251,8 @@ struct SettingsView: View {
         } message: {
             Text("This will delete all cached images. They will be re-downloaded as you browse.")
         }
-        .onChange(of: autoImageCachingEnabled) { _, enabled in
-            if !enabled {
-                showingClearImageCacheConfirmation = true
-            } else {
-                cacheService.updateArtworkBackupExclusion()
-            }
+        .onChange(of: autoImageCachingEnabled) { _, _ in
+            cacheService.updateArtworkBackupExclusion()
         }
         .onChange(of: maxCacheSizeGB) { _, newValue in
             let clamped = max(0, newValue)
@@ -503,12 +499,8 @@ struct SettingsView: View {
             } message: {
                 Text("This will delete all cached images. They will be re-downloaded as you browse.")
             }
-            .onChange(of: autoImageCachingEnabled) { _, enabled in
-                if !enabled {
-                    showingClearImageCacheConfirmation = true
-                } else {
-                    cacheService.updateArtworkBackupExclusion()
-                }
+            .onChange(of: autoImageCachingEnabled) { _, _ in
+                cacheService.updateArtworkBackupExclusion()
             }
             .onChange(of: maxCacheSizeGB) { _, newValue in
                 let clamped = max(0, newValue)
