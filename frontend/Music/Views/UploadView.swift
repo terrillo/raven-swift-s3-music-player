@@ -26,6 +26,7 @@ struct UploadView: View {
     @State private var isScanning = false
     @State private var scanTask: Task<Void, Never>?
     @State private var scanError: Error?
+    @State private var showingReenrichConfirmation = false
 
     var body: some View {
         NavigationStack {
@@ -79,9 +80,12 @@ struct UploadView: View {
                 UploadSettingsView(config: $config)
             }
             .sheet(isPresented: $showingPreview) {
-                if let preview = preview {
+                if preview != nil {
                     UploadPreviewSheet(
-                        preview: preview,
+                        preview: Binding(
+                            get: { preview! },
+                            set: { preview = $0 }
+                        ),
                         onCancel: {
                             showingPreview = false
                         },
@@ -275,6 +279,20 @@ struct UploadView: View {
                 }
                 .buttonStyle(.bordered)
             } else {
+                Button("Re-enrich Catalog") {
+                    showingReenrichConfirmation = true
+                }
+                .buttonStyle(.bordered)
+                .disabled(!config.isValid)
+                .confirmationDialog("Re-enrich Catalog", isPresented: $showingReenrichConfirmation) {
+                    Button("Re-enrich") {
+                        startReenrich()
+                    }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("This will re-fetch all artist and album metadata from APIs. Audio files will not be re-uploaded. This may take a while for large libraries.")
+                }
+
                 Button("Scan") {
                     startScan()
                 }
@@ -321,6 +339,17 @@ struct UploadView: View {
         }
     }
 
+    private func startReenrich() {
+        uploader.configure(config: config, modelContext: modelContext)
+        Task {
+            do {
+                try await uploader.reenrichCatalog(config: config)
+            } catch {
+                scanError = error
+            }
+        }
+    }
+
     private func startUploadFromPreview() {
         guard let folder = selectedFolder, let preview = preview else { return }
         uploader.configure(config: config, modelContext: modelContext)
@@ -332,11 +361,12 @@ struct UploadView: View {
 // MARK: - Upload Preview Sheet
 
 struct UploadPreviewSheet: View {
-    let preview: UploadPreview
+    @Binding var preview: UploadPreview
     let onCancel: () -> Void
     let onStartUpload: () -> Void
 
     @State private var showSkippedFiles = false
+    @State private var showWarnings = true
     @State private var newFilesPage = 0
     @State private var skippedFilesPage = 0
 
@@ -349,6 +379,10 @@ struct UploadPreviewSheet: View {
                 Text("Upload Preview")
                     .font(.headline)
                 Spacer()
+
+                // Confidence summary
+                confidenceSummary
+
                 Button {
                     onCancel()
                 } label: {
@@ -364,6 +398,11 @@ struct UploadPreviewSheet: View {
             // Content
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
+                    // Consistency warnings
+                    if !preview.consistencyWarnings.isEmpty {
+                        warningsSection
+                    }
+
                     // New files section
                     newFilesSection
 
@@ -394,7 +433,115 @@ struct UploadPreviewSheet: View {
             }
             .padding()
         }
-        .frame(width: 700, height: 500)
+        .frame(width: 750, height: 550)
+    }
+
+    private var confidenceSummary: some View {
+        HStack(spacing: 12) {
+            if preview.highConfidenceCount > 0 {
+                HStack(spacing: 3) {
+                    Circle().fill(.green).frame(width: 8, height: 8)
+                    Text("\(preview.highConfidenceCount)")
+                }
+            }
+            if preview.mediumConfidenceCount > 0 {
+                HStack(spacing: 3) {
+                    Circle().fill(.yellow).frame(width: 8, height: 8)
+                    Text("\(preview.mediumConfidenceCount)")
+                }
+            }
+            if preview.lowConfidenceCount > 0 {
+                HStack(spacing: 3) {
+                    Circle().fill(.orange).frame(width: 8, height: 8)
+                    Text("\(preview.lowConfidenceCount)")
+                }
+            }
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+    }
+
+    private var warningsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button {
+                withAnimation { showWarnings.toggle() }
+            } label: {
+                HStack {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                    Text("Warnings (\(preview.consistencyWarnings.count))")
+                        .font(.subheadline.weight(.semibold))
+                    Spacer()
+                    Image(systemName: showWarnings ? "chevron.down" : "chevron.right")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .buttonStyle(.plain)
+
+            if showWarnings {
+                ForEach(preview.consistencyWarnings) { warning in
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(warning.message)
+                                .font(.caption)
+                            Text((warning.folderPath as NSString).lastPathComponent)
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
+
+                        Spacer()
+
+                        if case .useArtistMajority(let artist) = warning.fix {
+                            Button("Use \"\(artist)\"") {
+                                applyFix(warning: warning)
+                            }
+                            .font(.caption)
+                            .buttonStyle(.bordered)
+                        } else if case .useAlbumMajority(let album) = warning.fix {
+                            Button("Use \"\(album)\"") {
+                                applyFix(warning: warning)
+                            }
+                            .font(.caption)
+                            .buttonStyle(.bordered)
+                        }
+                    }
+                    .padding(8)
+                    .background(Color.orange.opacity(0.1))
+                    .cornerRadius(6)
+                }
+            }
+        }
+    }
+
+    private func applyFix(warning: ConsistencyWarning) {
+        let affectedIDs = Set(warning.affectedItems)
+
+        func fixItem(_ item: inout UploadPreviewItem) {
+            guard affectedIDs.contains(item.id) else { return }
+            switch warning.fix {
+            case .useArtistMajority(let artist):
+                item.artist = artist
+                item.s3Key = Identifiers.generateS3Key(artist: artist, album: item.album, title: item.title, format: item.format)
+            case .useAlbumMajority(let album):
+                item.album = album
+                item.s3Key = Identifiers.generateS3Key(artist: item.artist, album: album, title: item.title, format: item.format)
+            case .markForReview:
+                break
+            }
+        }
+
+        for i in preview.newFiles.indices { fixItem(&preview.newFiles[i]) }
+        for i in preview.skippedFiles.indices { fixItem(&preview.skippedFiles[i]) }
+
+        // Re-classify items whose s3Key changed (may now collide with existing keys)
+        let existingKeys = preview.existingCatalogKeys
+        let allItems = preview.newFiles + preview.skippedFiles
+        preview.newFiles = allItems.filter { !existingKeys.contains($0.s3Key) }
+        preview.skippedFiles = allItems.filter { existingKeys.contains($0.s3Key) }
+
+        // Remove the applied warning and recompute counts
+        preview.consistencyWarnings.removeAll { $0.id == warning.id }
+        preview.recomputeConfidenceCounts()
     }
 
     private var newFilesSection: some View {
@@ -450,13 +597,15 @@ struct UploadPreviewSheet: View {
 
         return VStack(spacing: 0) {
             // Header row
-            HStack {
+            HStack(spacing: 0) {
+                Text("")
+                    .frame(width: 20)
                 Text("Artist")
                     .frame(width: 120, alignment: .leading)
                 Text("Album")
-                    .frame(width: 140, alignment: .leading)
+                    .frame(width: 130, alignment: .leading)
                 Text("Title")
-                    .frame(width: 160, alignment: .leading)
+                    .frame(width: 150, alignment: .leading)
                 Text("S3 Path")
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -469,15 +618,17 @@ struct UploadPreviewSheet: View {
             // Data rows (lazy for performance with large datasets)
             LazyVStack(spacing: 0) {
             ForEach(pageItems) { item in
-                HStack {
+                HStack(spacing: 0) {
+                    confidenceDot(item.confidence)
+                        .frame(width: 20)
                     Text(item.artist)
                         .frame(width: 120, alignment: .leading)
                         .lineLimit(1)
                     Text(item.album)
-                        .frame(width: 140, alignment: .leading)
+                        .frame(width: 130, alignment: .leading)
                         .lineLimit(1)
                     Text(item.title)
-                        .frame(width: 160, alignment: .leading)
+                        .frame(width: 150, alignment: .leading)
                         .lineLimit(1)
                     Text(item.s3Key)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -533,6 +684,21 @@ struct UploadPreviewSheet: View {
         .background(Color.secondary.opacity(0.05))
         .cornerRadius(6)
     }
+
+    private func confidenceDot(_ confidence: MetadataConfidence) -> some View {
+        Circle()
+            .fill(confidenceColor(confidence))
+            .frame(width: 8, height: 8)
+            .help(confidence == .high ? "High confidence" : confidence == .medium ? "Medium confidence" : "Low confidence")
+    }
+
+    private func confidenceColor(_ confidence: MetadataConfidence) -> Color {
+        switch confidence {
+        case .high: return .green
+        case .medium: return .yellow
+        case .low: return .orange
+        }
+    }
 }
 
 // MARK: - Stat View
@@ -566,6 +732,7 @@ struct UploadSettingsView: View {
     @State private var spacesPrefix = UploadConfiguration.defaultPrefix
     @State private var lastFMApiKey = ""
     @State private var musicBrainzContact = ""
+    @State private var acoustIDApiKey = ""
     @State private var showingSecret = false
     @State private var error: Error?
     @State private var isTesting = false
@@ -656,6 +823,8 @@ struct UploadSettingsView: View {
                     .help("For album artwork and wiki fallback")
                 TextField("MusicBrainz Contact Email", text: $musicBrainzContact)
                     .help("Required for MusicBrainz API access")
+                TextField("AcoustID API Key", text: $acoustIDApiKey)
+                    .help("For fingerprint-based identification of untagged files")
             }
 
             if let error = error {
@@ -693,6 +862,7 @@ struct UploadSettingsView: View {
         spacesPrefix = config.spacesPrefix
         lastFMApiKey = config.lastFMApiKey
         musicBrainzContact = config.musicBrainzContact
+        acoustIDApiKey = config.acoustIDApiKey
     }
 
     private func saveConfiguration() {
@@ -703,7 +873,8 @@ struct UploadSettingsView: View {
             spacesRegion: spacesRegion,
             spacesPrefix: spacesPrefix,
             lastFMApiKey: lastFMApiKey,
-            musicBrainzContact: musicBrainzContact
+            musicBrainzContact: musicBrainzContact,
+            acoustIDApiKey: acoustIDApiKey
         )
 
         do {

@@ -137,6 +137,16 @@ actor MusicBrainzService {
         }
     }
 
+    // MARK: - Clear Cache
+
+    func clearCache() {
+        artistMBIDCache.removeAll()
+        artistDetailsCache.removeAll()
+        releaseCache.removeAll()
+        try? FileManager.default.removeItem(at: Self.cacheFileURL)
+        print("🗑️ Cleared MusicBrainz cache")
+    }
+
     // MARK: - Cache Inspection
 
     /// Returns set of artist names that are cached
@@ -356,9 +366,25 @@ actor MusicBrainzService {
     }
 
     private func doReleaseSearch(_ query: String) async -> (String?, String?) {
-        guard let data = await makeRequest("release", params: ["query": query, "limit": "1"]),
+        guard let data = await makeRequest("release", params: ["query": query, "limit": "5"]),
               let releases = data["releases"] as? [[String: Any]],
-              let release = releases.first else {
+              !releases.isEmpty else {
+            return (nil, nil)
+        }
+
+        // Score results by MusicBrainz score and return the best
+        var bestRelease: [String: Any]?
+        var bestScore: Int = 0
+
+        for release in releases {
+            let score = release["score"] as? Int ?? 0
+            if score > bestScore {
+                bestScore = score
+                bestRelease = release
+            }
+        }
+
+        guard let release = bestRelease else {
             return (nil, nil)
         }
 

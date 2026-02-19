@@ -141,6 +141,17 @@ actor TheAudioDBService {
         }
     }
 
+    // MARK: - Clear Cache
+
+    func clearCache() {
+        artistCache.removeAll()
+        albumCache.removeAll()
+        trackCache.removeAll()
+        artistIdCache.removeAll()
+        try? FileManager.default.removeItem(at: Self.cacheFileURL)
+        print("🗑️ Cleared TheAudioDB cache")
+    }
+
     // MARK: - Cache Inspection
 
     /// Returns set of artist names that are cached
@@ -245,6 +256,11 @@ actor TheAudioDBService {
             if normSearch.contains(normResult) || normResult.contains(normSearch) {
                 return true
             }
+        }
+
+        // Fuzzy similarity check
+        if StringSimilarity.similarity(searchName, resultName) >= StringSimilarity.albumMatchThreshold {
+            return true
         }
 
         return false
@@ -367,11 +383,30 @@ actor TheAudioDBService {
             if let data = await makeRequest("album.php", params: ["i": artistId]),
                let albums = data["album"] as? [[String: Any]] {
                 let albumNameLower = albumName.lowercased()
+                var bestFuzzyMatch: (album: [String: Any], score: Double)?
+
                 for album in albums {
-                    if let name = album["strAlbum"] as? String, name.lowercased() == albumNameLower {
+                    guard let name = album["strAlbum"] as? String else { continue }
+
+                    // Exact match
+                    if name.lowercased() == albumNameLower {
                         albumData = album
                         break
                     }
+
+                    // Track best fuzzy match
+                    let score = StringSimilarity.similarity(albumName, name)
+                    if score >= StringSimilarity.albumMatchThreshold {
+                        if bestFuzzyMatch == nil || score > bestFuzzyMatch!.score {
+                            bestFuzzyMatch = (album, score)
+                        }
+                    }
+                }
+
+                // Use best fuzzy match if no exact match found
+                if albumData == nil, let fuzzy = bestFuzzyMatch {
+                    albumData = fuzzy.album
+                    print("🔍 Fuzzy album match: \"\(albumName)\" → \"\(fuzzy.album["strAlbum"] as? String ?? "?")\" (score: \(String(format: "%.2f", fuzzy.score)))")
                 }
             }
         }

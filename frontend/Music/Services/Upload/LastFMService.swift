@@ -70,6 +70,14 @@ actor LastFMService {
         }
     }
 
+    // MARK: - Clear Cache
+
+    func clearCache() {
+        albumCache.removeAll()
+        try? FileManager.default.removeItem(at: Self.cacheFileURL)
+        print("🗑️ Cleared LastFM cache")
+    }
+
     // MARK: - Cache Inspection
 
     /// Returns set of album keys (artist|album format) that are cached

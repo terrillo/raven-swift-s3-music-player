@@ -11,31 +11,82 @@ import SwiftData
 
 #if os(macOS)
 
+// MARK: - Confidence
+
+/// Confidence level for metadata matching
+enum MetadataConfidence: String, Comparable, Hashable, Sendable {
+    case high    // Exact API match from TheAudioDB/MusicBrainz
+    case medium  // Fuzzy match, normalized match, or fingerprint-based
+    case low     // No API match, using local tags only
+
+    private var sortOrder: Int {
+        switch self {
+        case .high: return 2
+        case .medium: return 1
+        case .low: return 0
+        }
+    }
+
+    static func < (lhs: MetadataConfidence, rhs: MetadataConfidence) -> Bool {
+        lhs.sortOrder < rhs.sortOrder
+    }
+}
+
 // MARK: - Preview Data Structures
 
 /// A single item in the upload preview showing what will be uploaded
 struct UploadPreviewItem: Identifiable {
     let id = UUID()
-    let localPath: String           // Full local file path
-    let artist: String              // Corrected from TheAudioDB
-    let album: String               // Corrected from TheAudioDB
+    var localPath: String           // Full local file path
+    var artist: String              // Corrected from TheAudioDB
+    var album: String               // Corrected from TheAudioDB
     let title: String
-    let s3Key: String               // Final path: Artist/Album/Title.ext
+    var s3Key: String               // Final path: Artist/Album/Title.ext
     let format: String
     let needsConversion: Bool
     let fileURL: URL                // Original file URL for upload
     let metadata: TrackMetadata     // Cached from scan phase to avoid re-extraction
+    var artistConfidence: MetadataConfidence = .low
+    var albumConfidence: MetadataConfidence = .low
+    var confidence: MetadataConfidence { min(artistConfidence, albumConfidence) }
 }
 
 /// Preview of what will be uploaded, split into new and existing files
 struct UploadPreview {
-    let newFiles: [UploadPreviewItem]           // Files to upload
-    let skippedFiles: [UploadPreviewItem]       // Already exist on remote
+    var newFiles: [UploadPreviewItem]           // Files to upload
+    var skippedFiles: [UploadPreviewItem]       // Already exist on remote
     let existingCatalogKeys: Set<String>        // All s3Keys from existing catalog (for existingKeysCache)
     let existingAddedAtMap: [String: Date]      // Preserved addedAt dates from catalog
+    var consistencyWarnings: [ConsistencyWarning] = []
 
     var totalNewFiles: Int { newFiles.count }
     var totalSkippedFiles: Int { skippedFiles.count }
+
+    // Precomputed confidence counts to avoid recalculating on every render
+    var highConfidenceCount: Int = 0
+    var mediumConfidenceCount: Int = 0
+    var lowConfidenceCount: Int = 0
+
+    mutating func recomputeConfidenceCounts() {
+        var high = 0, medium = 0, low = 0
+        for item in newFiles {
+            switch item.confidence {
+            case .high: high += 1
+            case .medium: medium += 1
+            case .low: low += 1
+            }
+        }
+        for item in skippedFiles {
+            switch item.confidence {
+            case .high: high += 1
+            case .medium: medium += 1
+            case .low: low += 1
+            }
+        }
+        highConfidenceCount = high
+        mediumConfidenceCount = medium
+        lowConfidenceCount = low
+    }
 }
 
 /// Upload progress state
@@ -262,21 +313,49 @@ class MusicUploader {
         let catalogData = await catalogDataTask
         let existingKeys = catalogData.existingKeys
 
-        // Phase 4: Collect unique artists and albums for batch API lookup
-        progress.currentFile = "Looking up artist/album corrections..."
+        // Phase 4: Classify files as existing (use catalog) or new (need API lookup)
+        // Generate candidate s3Keys from raw metadata. If a candidate matches an
+        // existing catalog key, the file is existing and we use catalog corrections
+        // directly — skipping API lookups entirely for those artists/albums.
+        progress.currentFile = "Classifying files..."
+        var artistCorrections: [String: (name: String, confidence: MetadataConfidence)] = [:]
+        var albumCorrections: [String: (name: String, confidence: MetadataConfidence)] = [:]
         var uniqueArtists: Set<String> = []
         var uniqueAlbums: Set<String> = []  // "artist|album" format
 
-        for (_, metadata) in extractedMetadata {
+        let catalogCorrections = catalogData.correctedNames
+
+        for (fileURL, metadata) in extractedMetadata {
             let rawArtist = metadata.albumArtist ?? metadata.artist ?? "Unknown Artist"
             let rawAlbum = metadata.album ?? "Unknown Album"
-            uniqueArtists.insert(rawArtist)
-            uniqueAlbums.insert("\(rawArtist)|\(rawAlbum)")
+            let format = AudioConverter.needsConversion(fileURL) ? "m4a" : fileURL.pathExtension.lowercased()
+
+            let candidateS3Key = Identifiers.generateS3Key(
+                artist: rawArtist, album: rawAlbum,
+                title: metadata.title, format: format
+            )
+
+            if let catalogEntry = catalogCorrections[candidateS3Key] {
+                // Existing file — use catalog's corrected names (no API lookup needed)
+                if artistCorrections[rawArtist] == nil {
+                    artistCorrections[rawArtist] = (catalogEntry.artist, .high)
+                }
+                let albumKey = "\(rawArtist)|\(rawAlbum)"
+                if albumCorrections[albumKey] == nil {
+                    albumCorrections[albumKey] = (catalogEntry.album, .high)
+                }
+            } else {
+                // Potentially new or corrected name — needs API lookup
+                uniqueArtists.insert(rawArtist)
+                uniqueAlbums.insert("\(rawArtist)|\(rawAlbum)")
+            }
         }
+
+        print("📋 Early classification: \(artistCorrections.count) artists from catalog, \(uniqueArtists.count) need API lookup")
 
         // Phase 5: Fetch corrections for unique artists (parallel with rate limiting)
         // Optimization: Check cache first to skip API calls on rescan
-        var artistCorrections: [String: String] = [:]
+        progress.currentFile = "Looking up artist/album corrections..."
         let cachedArtists = await theAudioDB.getCachedArtistKeys()
         let uncachedArtists = uniqueArtists.subtracting(cachedArtists)
 
@@ -288,22 +367,27 @@ class MusicUploader {
             print("✅ All \(uniqueArtists.count) artists found in cache")
             for rawArtist in uniqueArtists {
                 let artistInfo = await theAudioDB.fetchArtistInfo(rawArtist)  // Returns from cache instantly
-                let corrected = artistInfo.name ?? Identifiers.normalizeArtistName(rawArtist) ?? rawArtist
-                artistCorrections[rawArtist] = corrected
+                if let apiName = artistInfo.name {
+                    let confidence: MetadataConfidence = apiName.lowercased() == rawArtist.lowercased() ? .high : .medium
+                    artistCorrections[rawArtist] = (apiName, confidence)
+                } else {
+                    let fallback = Identifiers.normalizeArtistName(rawArtist) ?? rawArtist
+                    artistCorrections[rawArtist] = (fallback, .low)
+                }
             }
-            await MainActor.run { progress.processedFiles = artistCorrections.count }
+            await MainActor.run { progress.processedFiles = uniqueArtists.count }
         } else {
             // Some artists need API lookup
             print("📡 Fetching \(uncachedArtists.count) uncached artists (\(cachedArtists.count) cached)")
 
-            await withTaskGroup(of: (String, String)?.self) { group in
+            await withTaskGroup(of: (String, String, MetadataConfidence)?.self) { group in
                 var submitted = 0
                 let artistArray = Array(uniqueArtists)
 
                 for rawArtist in artistArray {
                     if submitted >= Self.maxConcurrentAPILookups {
-                        if let result = await group.next(), let (raw, corrected) = result {
-                            artistCorrections[raw] = corrected
+                        if let result = await group.next(), let (raw, corrected, conf) = result {
+                            artistCorrections[raw] = (corrected, conf)
                             await MainActor.run { progress.processedFiles += 1 }
                         }
                     }
@@ -311,21 +395,26 @@ class MusicUploader {
                     group.addTask {
                         if Task.isCancelled { return nil }
                         let artistInfo = await theAudioDB.fetchArtistInfo(rawArtist)
-                        let corrected = artistInfo.name ?? Identifiers.normalizeArtistName(rawArtist) ?? rawArtist
-                        return (rawArtist, corrected)
+                        if let apiName = artistInfo.name {
+                            let confidence: MetadataConfidence = apiName.lowercased() == rawArtist.lowercased() ? .high : .medium
+                            return (rawArtist, apiName, confidence)
+                        } else {
+                            let fallback = Identifiers.normalizeArtistName(rawArtist) ?? rawArtist
+                            return (rawArtist, fallback, .low)
+                        }
                     }
                     submitted += 1
                 }
 
                 // Collect remaining
                 for await result in group {
-                    if let (raw, corrected) = result {
-                        artistCorrections[raw] = corrected
+                    if let (raw, corrected, conf) = result {
+                        artistCorrections[raw] = (corrected, conf)
                     }
                 }
 
                 // Final progress update
-                await MainActor.run { progress.processedFiles = artistCorrections.count }
+                await MainActor.run { progress.processedFiles = uniqueArtists.count }
             }
         }
 
@@ -333,7 +422,6 @@ class MusicUploader {
 
         // Phase 6: Fetch corrections for unique albums (parallel with rate limiting)
         // Optimization: Check cache first to skip API calls on rescan
-        var albumCorrections: [String: String] = [:]
         let cachedAlbums = await theAudioDB.getCachedAlbumKeys()
         let uncachedAlbums = uniqueAlbums.subtracting(cachedAlbums)
 
@@ -348,17 +436,22 @@ class MusicUploader {
                 guard parts.count == 2, let firstPart = parts.first else { continue }
                 let rawArtist = String(firstPart)
                 let rawAlbum = String(parts[1])
-                let correctedArtist = artistCorrections[rawArtist] ?? rawArtist
+                let correctedArtist = artistCorrections[rawArtist]?.name ?? rawArtist
 
                 let albumInfo = await theAudioDB.fetchAlbumInfo(artist: correctedArtist, album: rawAlbum)  // Returns from cache
-                albumCorrections[albumKey] = albumInfo.name ?? rawAlbum
+                if let apiName = albumInfo.name {
+                    let confidence: MetadataConfidence = apiName.lowercased() == rawAlbum.lowercased() ? .high : .medium
+                    albumCorrections[albumKey] = (apiName, confidence)
+                } else {
+                    albumCorrections[albumKey] = (rawAlbum, .low)
+                }
             }
-            await MainActor.run { progress.processedFiles = albumCorrections.count }
+            await MainActor.run { progress.processedFiles = uniqueAlbums.count }
         } else {
             // Some albums need API lookup
             print("📡 Fetching \(uncachedAlbums.count) uncached albums (\(cachedAlbums.count) cached)")
 
-            await withTaskGroup(of: (String, String)?.self) { group in
+            await withTaskGroup(of: (String, String, MetadataConfidence)?.self) { group in
                 var submitted = 0
                 let albumArray = Array(uniqueAlbums)
 
@@ -367,11 +460,11 @@ class MusicUploader {
                     guard parts.count == 2, let firstPart = parts.first else { continue }
                     let rawArtist = String(firstPart)
                     let rawAlbum = String(parts[1])
-                    let correctedArtist = artistCorrections[rawArtist] ?? rawArtist
+                    let correctedArtist = artistCorrections[rawArtist]?.name ?? rawArtist
 
                     if submitted >= Self.maxConcurrentAPILookups {
-                        if let result = await group.next(), let (key, corrected) = result {
-                            albumCorrections[key] = corrected
+                        if let result = await group.next(), let (key, corrected, conf) = result {
+                            albumCorrections[key] = (corrected, conf)
                             await MainActor.run { progress.processedFiles += 1 }
                         }
                     }
@@ -379,22 +472,93 @@ class MusicUploader {
                     group.addTask {
                         if Task.isCancelled { return nil }
                         let albumInfo = await theAudioDB.fetchAlbumInfo(artist: correctedArtist, album: rawAlbum)
-                        return (albumKey, albumInfo.name ?? rawAlbum)
+                        if let apiName = albumInfo.name {
+                            let confidence: MetadataConfidence = apiName.lowercased() == rawAlbum.lowercased() ? .high : .medium
+                            return (albumKey, apiName, confidence)
+                        } else {
+                            return (albumKey, rawAlbum, .low)
+                        }
                     }
                     submitted += 1
                 }
 
                 // Collect remaining
                 for await result in group {
-                    if let (key, corrected) = result {
-                        albumCorrections[key] = corrected
+                    if let (key, corrected, conf) = result {
+                        albumCorrections[key] = (corrected, conf)
                     }
                 }
 
                 // Final progress update
-                await MainActor.run { progress.processedFiles = albumCorrections.count }
+                await MainActor.run { progress.processedFiles = uniqueAlbums.count }
             }
         }
+
+        // Phase 6.5: AcoustID fingerprinting for low-confidence tracks
+        // Identify tracks where both artist and album are low confidence
+        let acoustID = config.acoustIDApiKey.isEmpty ? nil : AcoustIDService(apiKey: config.acoustIDApiKey)
+
+        if let acoustID = acoustID {
+            // Build URL→metadata dictionary for O(1) lookups in applyFingerprintResult
+            let metadataByURL: [URL: TrackMetadata] = Dictionary(extractedMetadata, uniquingKeysWith: { first, _ in first })
+
+            // Find tracks with low confidence
+            var lowConfidenceFiles: [(URL, TrackMetadata)] = []
+            for (fileURL, metadata) in extractedMetadata {
+                let rawArtist = metadata.albumArtist ?? metadata.artist ?? "Unknown Artist"
+                let rawAlbum = metadata.album ?? "Unknown Album"
+                let albumKey = "\(rawArtist)|\(rawAlbum)"
+                let artistConf = artistCorrections[rawArtist]?.confidence ?? .low
+                let albumConf = albumCorrections[albumKey]?.confidence ?? .low
+                if artistConf == .low && albumConf == .low {
+                    lowConfidenceFiles.append((fileURL, metadata))
+                }
+            }
+
+            if !lowConfidenceFiles.isEmpty {
+                progress.currentFile = "Fingerprinting \(lowConfidenceFiles.count) unidentified tracks..."
+                progress.totalFiles = lowConfidenceFiles.count
+                progress.processedFiles = 0
+
+                let maxConcurrentFingerprints = 4
+                await withTaskGroup(of: (URL, AcoustIDResult?)?.self) { group in
+                    var submitted = 0
+
+                    for (fileURL, _) in lowConfidenceFiles {
+                        if submitted >= maxConcurrentFingerprints {
+                            if let result = await group.next() {
+                                if let (url, acoustResult) = result, let acoustResult = acoustResult {
+                                    await applyFingerprintResult(url: url, result: acoustResult, metadataByURL: metadataByURL, artistCorrections: &artistCorrections, albumCorrections: &albumCorrections)
+                                }
+                                await MainActor.run { progress.processedFiles += 1 }
+                            }
+                        }
+
+                        group.addTask {
+                            // Generate fingerprint OUTSIDE the actor (CPU-bound, enables true parallelism)
+                            guard let fp = try? AcoustIDService.generateFingerprint(for: fileURL) else {
+                                return (fileURL, nil)
+                            }
+                            // Only the API query goes through the actor (rate-limited + cached)
+                            let result = try? await acoustID.lookup(fingerprint: fp.fingerprint, duration: fp.duration, cacheKey: fileURL.path)
+                            return (fileURL, result)
+                        }
+                        submitted += 1
+                    }
+
+                    for await result in group {
+                        if let (url, acoustResult) = result, let acoustResult = acoustResult {
+                            await applyFingerprintResult(url: url, result: acoustResult, metadataByURL: metadataByURL, artistCorrections: &artistCorrections, albumCorrections: &albumCorrections)
+                        }
+                        await MainActor.run { progress.processedFiles += 1 }
+                    }
+                }
+
+                print("🎵 Fingerprinting complete")
+            }
+        }
+
+        try Task.checkCancellation()
 
         // Phase 7: Build preview items (fast, in-memory)
         progress.currentFile = "Building preview..."
@@ -406,9 +570,14 @@ class MusicUploader {
             let rawArtist = metadata.albumArtist ?? metadata.artist ?? "Unknown Artist"
             let rawAlbum = metadata.album ?? "Unknown Album"
 
-            let correctedArtist = artistCorrections[rawArtist] ?? rawArtist
+            let artistResult = artistCorrections[rawArtist]
+            let correctedArtist = artistResult?.name ?? rawArtist
+            let artistConf = artistResult?.confidence ?? .low
+
             let albumKey = "\(rawArtist)|\(rawAlbum)"
-            let correctedAlbum = albumCorrections[albumKey] ?? rawAlbum
+            let albumResult = albumCorrections[albumKey]
+            let correctedAlbum = albumResult?.name ?? rawAlbum
+            let albumConf = albumResult?.confidence ?? .low
 
             let needsConversion = AudioConverter.needsConversion(fileURL)
             let format = needsConversion ? "m4a" : fileURL.pathExtension.lowercased()
@@ -429,7 +598,9 @@ class MusicUploader {
                 format: format,
                 needsConversion: needsConversion,
                 fileURL: fileURL,
-                metadata: metadata
+                metadata: metadata,
+                artistConfidence: artistConf,
+                albumConfidence: albumConf
             )
 
             if existingKeys.contains(s3Key) {
@@ -439,12 +610,21 @@ class MusicUploader {
             }
         }
 
+        // Phase 8: Cross-track consistency validation
+        let allItems = newFiles + skippedFiles
+        let consistencyWarnings = ConsistencyValidator.validate(allItems)
+        if !consistencyWarnings.isEmpty {
+            print("⚠️ Found \(consistencyWarnings.count) consistency warnings")
+        }
+
         // Save caches for future scans
         await metadataExtractor.saveCache()
         await theAudioDB.saveCache()
 
         progress.phase = .idle
-        return UploadPreview(newFiles: newFiles, skippedFiles: skippedFiles, existingCatalogKeys: catalogData.existingKeys, existingAddedAtMap: catalogData.addedAtMap)
+        var result = UploadPreview(newFiles: newFiles, skippedFiles: skippedFiles, existingCatalogKeys: catalogData.existingKeys, existingAddedAtMap: catalogData.addedAtMap, consistencyWarnings: consistencyWarnings)
+        result.recomputeConfidenceCounts()
+        return result
     }
 
     // MARK: - Upload from Preview
@@ -810,6 +990,153 @@ class MusicUploader {
         }
     }
 
+    // MARK: - Fingerprint Result Application
+
+    private func applyFingerprintResult(
+        url: URL,
+        result: AcoustIDResult,
+        metadataByURL: [URL: TrackMetadata],
+        artistCorrections: inout [String: (name: String, confidence: MetadataConfidence)],
+        albumCorrections: inout [String: (name: String, confidence: MetadataConfidence)]
+    ) async {
+        guard let metadata = metadataByURL[url] else { return }
+        let rawArtist = metadata.albumArtist ?? metadata.artist ?? "Unknown Artist"
+        let rawAlbum = metadata.album ?? "Unknown Album"
+        let albumKey = "\(rawArtist)|\(rawAlbum)"
+
+        if let artist = result.artist {
+            artistCorrections[rawArtist] = (artist, .medium)
+            print("🎵 Fingerprint artist: \"\(rawArtist)\" → \"\(artist)\"")
+        }
+        if let album = result.album {
+            albumCorrections[albumKey] = (album, .medium)
+            print("🎵 Fingerprint album: \"\(rawAlbum)\" → \"\(album)\"")
+        }
+    }
+
+    // MARK: - Re-enrich Catalog
+
+    func reenrichCatalog(config: UploadConfiguration) async throws {
+        guard config.isValid else {
+            throw UploaderError.invalidConfiguration
+        }
+        guard let modelContainer = modelContainer else {
+            throw UploaderError.noModelContext
+        }
+
+        isRunning = true
+        error = nil
+        progress = UploadProgress(
+            phase: .fetchingExisting,
+            totalFiles: 0,
+            processedFiles: 0,
+            skippedFiles: 0,
+            convertedFiles: 0,
+            failedFiles: 0,
+            currentFile: "Fetching existing catalog...",
+            discoveredFiles: 0
+        )
+
+        do {
+            // Fetch existing catalog (single fetch)
+            let cacheBuster = Int(Date().timeIntervalSince1970)
+            guard let url = URL(string: "\(config.cdnBaseURLWithoutPrefix)/\(config.spacesPrefix)/catalog.json?t=\(cacheBuster)") else {
+                throw UploaderError.invalidConfiguration
+            }
+
+            let (data, response) = try await URLSession.shared.data(from: url)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200 else {
+                throw UploaderError.noAudioFilesFound
+            }
+
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let catalog = try decoder.decode(MusicCatalog.self, from: data)
+
+            guard !catalog.artists.isEmpty else {
+                throw UploaderError.noAudioFilesFound
+            }
+
+            // Convert to ProcessedTracks
+            var processedTracks: [ProcessedTrack] = []
+            for artist in catalog.artists {
+                for album in artist.albums {
+                    for track in album.tracks {
+                        processedTracks.append(ProcessedTrack(
+                            title: track.title,
+                            artist: track.artist ?? artist.name,
+                            album: track.album ?? album.name,
+                            albumArtist: track.albumArtist,
+                            trackNumber: track.trackNumber,
+                            trackTotal: track.trackTotal,
+                            discNumber: track.discNumber,
+                            discTotal: track.discTotal,
+                            duration: track.duration,
+                            year: track.year,
+                            genre: track.genre,
+                            composer: track.composer,
+                            comment: track.comment,
+                            bitrate: track.bitrate,
+                            samplerate: track.samplerate,
+                            channels: track.channels,
+                            filesize: track.filesize,
+                            format: track.format,
+                            s3Key: track.s3Key,
+                            url: track.url,
+                            embeddedArtworkUrl: track.embeddedArtworkUrl,
+                            originalFormat: track.originalFormat,
+                            addedAt: track.addedAt
+                        ))
+                    }
+                }
+            }
+
+            progress.totalFiles = processedTracks.count
+            progress.currentFile = "Clearing API caches..."
+
+            // Clear caches to force fresh lookups
+            let storageService = StorageService(config: config)
+            let theAudioDB = TheAudioDBService(storageService: storageService)
+            let musicBrainz = config.musicBrainzContact.isEmpty ? nil : MusicBrainzService(contact: config.musicBrainzContact)
+            let lastFM = config.lastFMApiKey.isEmpty ? nil : LastFMService(apiKey: config.lastFMApiKey, storageService: storageService)
+
+            await theAudioDB.clearCache()
+            if let mb = musicBrainz { await mb.clearCache() }
+            if let lfm = lastFM { await lfm.clearCache() }
+
+            // Rebuild catalog with fresh metadata
+            progress.phase = .buildingCatalog
+            progress.currentFile = "Re-enriching metadata..."
+
+            let catalogBuilder = CatalogBuilder(
+                theAudioDB: theAudioDB,
+                musicBrainz: musicBrainz,
+                lastFM: lastFM,
+                storageService: storageService,
+                cdnBaseURL: config.cdnBaseURL
+            )
+
+            let (catalogArtists, totalTracks) = await catalogBuilder.build(from: processedTracks)
+
+            // Save caches
+            await theAudioDB.saveCache()
+            if let mb = musicBrainz { await mb.saveCache() }
+            if let lfm = lastFM { await lfm.saveCache() }
+
+            // Save catalog
+            progress.phase = .savingCatalog
+            try await saveCatalog(artists: catalogArtists, totalTracks: totalTracks, storageService: storageService, config: config)
+
+            progress.phase = .complete
+        } catch {
+            self.error = error
+            progress.phase = .failed
+        }
+
+        isRunning = false
+    }
+
     // MARK: - Scan for Audio Files
 
     private func scanForAudioFiles(in directory: URL) async throws -> [URL] {
@@ -865,6 +1192,7 @@ class MusicUploader {
     private struct CatalogFetchResult: Sendable {
         let existingKeys: Set<String>
         let addedAtMap: [String: Date]
+        let correctedNames: [String: (artist: String, album: String)]  // s3Key → catalog names
     }
 
     /// Fetches catalog.json from CDN and extracts both existing keys and addedAt map in one pass.
@@ -874,7 +1202,7 @@ class MusicUploader {
         // Cache-bust to bypass CDN TTL (S3 listing queried origin directly; catalog.json goes through CDN)
         let cacheBuster = Int(Date().timeIntervalSince1970)
         guard let url = URL(string: "\(config.cdnBaseURLWithoutPrefix)/\(config.spacesPrefix)/catalog.json?t=\(cacheBuster)") else {
-            return CatalogFetchResult(existingKeys: [], addedAtMap: [:])
+            return CatalogFetchResult(existingKeys: [], addedAtMap: [:], correctedNames: [:])
         }
 
         do {
@@ -882,7 +1210,7 @@ class MusicUploader {
             guard let httpResponse = response as? HTTPURLResponse,
                   httpResponse.statusCode == 200 else {
                 print("📋 No existing catalog found on CDN (new catalog will be created)")
-                return CatalogFetchResult(existingKeys: [], addedAtMap: [:])
+                return CatalogFetchResult(existingKeys: [], addedAtMap: [:], correctedNames: [:])
             }
 
             let decoder = JSONDecoder()
@@ -891,10 +1219,12 @@ class MusicUploader {
 
             var keys = Set<String>()
             var addedAtMap: [String: Date] = [:]
+            var correctedNames: [String: (artist: String, album: String)] = [:]
             for artist in catalog.artists {
                 for album in artist.albums {
                     for track in album.tracks {
                         keys.insert(track.s3Key)
+                        correctedNames[track.s3Key] = (artist: artist.name, album: album.name)
                         if let addedAt = track.addedAt {
                             addedAtMap[track.s3Key] = addedAt
                         }
@@ -903,10 +1233,10 @@ class MusicUploader {
             }
 
             print("📋 Found \(keys.count) existing tracks (\(addedAtMap.count) with addedAt dates)")
-            return CatalogFetchResult(existingKeys: keys, addedAtMap: addedAtMap)
+            return CatalogFetchResult(existingKeys: keys, addedAtMap: addedAtMap, correctedNames: correctedNames)
         } catch {
             print("⚠️ Could not fetch existing catalog: \(error.localizedDescription)")
-            return CatalogFetchResult(existingKeys: [], addedAtMap: [:])
+            return CatalogFetchResult(existingKeys: [], addedAtMap: [:], correctedNames: [:])
         }
     }
 

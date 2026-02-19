@@ -19,6 +19,7 @@ struct UploadConfiguration: Codable, Equatable {
     var spacesPrefix: String
     var lastFMApiKey: String
     var musicBrainzContact: String
+    var acoustIDApiKey: String
 
     static let defaultRegion = "sfo3"
     static let defaultPrefix = "music"
@@ -30,7 +31,8 @@ struct UploadConfiguration: Codable, Equatable {
         spacesRegion: String = defaultRegion,
         spacesPrefix: String = defaultPrefix,
         lastFMApiKey: String = "",
-        musicBrainzContact: String = ""
+        musicBrainzContact: String = "",
+        acoustIDApiKey: String = ""
     ) {
         self.spacesKey = spacesKey
         self.spacesSecret = spacesSecret
@@ -39,6 +41,7 @@ struct UploadConfiguration: Codable, Equatable {
         self.spacesPrefix = spacesPrefix
         self.lastFMApiKey = lastFMApiKey
         self.musicBrainzContact = musicBrainzContact
+        self.acoustIDApiKey = acoustIDApiKey
     }
 
     var isValid: Bool {
