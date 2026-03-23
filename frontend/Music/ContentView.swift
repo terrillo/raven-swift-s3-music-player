@@ -24,7 +24,7 @@ enum Tab: String, CaseIterable {
     var icon: String {
         switch self {
         case .home: return "house.fill"
-        case .artists: return "person.3.sequence.fill"
+        case .artists: return "person.2.fill"
         case .songs: return "music.note"
         case .playlists: return "music.note.square.stack"
         case .radio: return "antenna.radiowaves.left.and.right"
@@ -112,7 +112,7 @@ struct ContentView: View {
 
                     ArtistsView(showingSearch: $showingSearch, musicService: musicService, playerService: playerService, cacheService: cacheService, pendingNavigation: .constant(nil))
                         .tabItem {
-                            Label("Artists", systemImage: "person.3.sequence.fill")
+                            Label("Artists", systemImage: "person.2.fill")
                         }
                         .tag(Tab.artists)
 

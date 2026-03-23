@@ -75,7 +75,7 @@ struct HomeView: View {
     private var topTracksSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("Top Tracks")
+                Text("Top Tracks This Week")
                     .font(.title2)
                     .fontWeight(.bold)
                 Spacer()
@@ -92,7 +92,7 @@ struct HomeView: View {
             }
 
             if topTracks.isEmpty {
-                Text("Play some music to see your top tracks")
+                Text("Play some music this week to see your top tracks")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .padding(.vertical, 8)
@@ -131,7 +131,7 @@ struct HomeView: View {
     private var topTracks: [(track: Track, playCount: Int)] { cachedTopTracks }
 
     private func updateTopTracks() {
-        let data = AnalyticsStore.shared.fetchTopTracks(limit: 5, period: .allTime)
+        let data = AnalyticsStore.shared.fetchTopTracks(limit: 5, period: .week)
         cachedTopTracks = data.compactMap { (s3Key, count) in
             guard let track = musicService.trackByS3Key[s3Key] else { return nil }
             return (track: track, playCount: count)

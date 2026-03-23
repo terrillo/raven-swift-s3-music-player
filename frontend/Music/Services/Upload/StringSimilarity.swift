@@ -75,6 +75,7 @@ enum StringSimilarity {
         for i in 0..<len1 {
             let start = max(0, i - matchWindow)
             let end = min(i + matchWindow + 1, len2)
+            guard start < end else { continue }
 
             for j in start..<end {
                 if s2Matches[j] || a1[i] != a2[j] { continue }
