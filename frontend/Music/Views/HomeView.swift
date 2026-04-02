@@ -212,17 +212,15 @@ struct HomeView: View {
                     .font(.title2)
                     .fontWeight(.bold)
                 Spacer()
-                if playlists.count > 3 {
-                    NavigationLink {
-                        ManualPlaylistsListView(
-                            musicService: musicService,
-                            playerService: playerService,
-                            cacheService: cacheService
-                        )
-                    } label: {
-                        Text("See All")
-                            .font(.subheadline)
-                    }
+                NavigationLink {
+                    ManualPlaylistsListView(
+                        musicService: musicService,
+                        playerService: playerService,
+                        cacheService: cacheService
+                    )
+                } label: {
+                    Text("See All")
+                        .font(.subheadline)
                 }
             }
 
@@ -232,7 +230,7 @@ struct HomeView: View {
                     .foregroundStyle(.secondary)
                     .padding(.vertical, 8)
             } else {
-                ForEach(Array(playlists.prefix(3).enumerated()), id: \.element.id) { index, playlist in
+                ForEach(Array(playlists.enumerated()), id: \.element.id) { index, playlist in
                     NavigationLink {
                         PlaylistDetailView(
                             playlist: playlist,
@@ -245,7 +243,7 @@ struct HomeView: View {
                     }
                     .buttonStyle(.plain)
 
-                    if index < min(playlists.count, 3) - 1 {
+                    if index < playlists.count - 1 {
                         Divider()
                     }
                 }
