@@ -326,10 +326,26 @@ class MusicService {
         let batchSize = 50
         let artists = catalogData.artists
 
-        // Phase 1: Delete existing records (separate transaction)
+        // Phase 1: Snapshot existing artwork URLs, then delete records
         Task.detached {
             let bgContext = ModelContext(modelContainer)
             bgContext.autosaveEnabled = false
+
+            // Preserve local artwork URLs that may be absent from the remote catalog
+            var existingArtistImages: [String: String] = [:]
+            var existingAlbumImages: [String: String] = [:]
+            var existingTrackArtwork: [String: String] = [:]
+
+            let existingArtists = (try? bgContext.fetch(FetchDescriptor<CatalogArtist>())) ?? []
+            for artist in existingArtists {
+                if let url = artist.imageUrl { existingArtistImages[artist.name] = url }
+                for album in artist.albums ?? [] {
+                    if let url = album.imageUrl { existingAlbumImages["\(artist.name)/\(album.name)"] = url }
+                    for track in album.tracks ?? [] {
+                        if let url = track.embeddedArtworkUrl { existingTrackArtwork[track.s3Key] = url }
+                    }
+                }
+            }
 
             try? bgContext.delete(model: CatalogTrack.self)
             try? bgContext.delete(model: CatalogAlbum.self)
@@ -354,7 +370,7 @@ class MusicService {
                         id: artist.id,
                         name: artist.name,
                         bio: artist.bio,
-                        imageUrl: artist.imageUrl,
+                        imageUrl: artist.imageUrl ?? existingArtistImages[artist.name],
                         genre: artist.genre,
                         style: artist.style,
                         mood: artist.mood,
@@ -369,7 +385,7 @@ class MusicService {
                         let catalogAlbum = CatalogAlbum(
                             id: album.id,
                             name: album.name,
-                            imageUrl: album.imageUrl,
+                            imageUrl: album.imageUrl ?? existingAlbumImages["\(artist.name)/\(album.name)"],
                             wiki: album.wiki,
                             releaseDate: album.releaseDate,
                             genre: album.genre,
@@ -396,7 +412,7 @@ class MusicService {
                                 duration: track.duration,
                                 format: track.format,
                                 url: track.url,
-                                embeddedArtworkUrl: track.embeddedArtworkUrl,
+                                embeddedArtworkUrl: track.embeddedArtworkUrl ?? existingTrackArtwork[track.s3Key],
                                 genre: track.genre,
                                 style: track.style,
                                 mood: track.mood,

@@ -776,28 +776,15 @@ class MusicUploader {
                         // Preserve existing addedAt or use current date as fallback
                         let addedAt = existingAddedAtMap[item.s3Key] ?? Date()
 
-                        // Check for local album art (fast filesystem check, no embedded extraction)
-                        var embeddedArtworkUrl: String?
-                        let dirPath = item.fileURL.deletingLastPathComponent().path
-                        let cached = await localArtworkCache.getCachedURL(for: dirPath)
-                        if cached.isCached {
-                            embeddedArtworkUrl = cached.url
-                        } else if let localArt = artworkExtractor.extractFromDirectory(item.fileURL.deletingLastPathComponent()) {
-                            do {
-                                let uploadedUrl = try await storageService.uploadArtworkBytes(
-                                    localArt.data,
-                                    mimeType: localArt.mimeType,
-                                    artist: item.artist,
-                                    album: item.album
-                                )
-                                await localArtworkCache.cacheURL(uploadedUrl, for: dirPath)
-                                embeddedArtworkUrl = uploadedUrl
-                            } catch {
-                                await localArtworkCache.cacheURL(nil, for: dirPath)
-                            }
-                        } else {
-                            await localArtworkCache.cacheURL(nil, for: dirPath)
-                        }
+                        let embeddedArtworkUrl = await self.resolveArtwork(
+                            for: item.fileURL,
+                            artist: item.artist,
+                            album: item.album,
+                            s3Key: item.s3Key,
+                            artworkExtractor: artworkExtractor,
+                            storageService: storageService,
+                            localArtworkCache: localArtworkCache
+                        )
 
                         return ProcessedTrack(
                             title: item.title,
@@ -898,45 +885,15 @@ class MusicUploader {
             }
         }
 
-        // Extract embedded artwork
-        var embeddedArtworkUrl: String?
-        if let artwork = await artworkExtractor.extract(from: fileURL) {
-            do {
-                embeddedArtworkUrl = try await storageService.uploadArtworkBytes(
-                    artwork.data,
-                    mimeType: artwork.mimeType,
-                    artist: previewItem.artist,
-                    album: previewItem.album
-                )
-            } catch {
-                print("⚠️ Artwork upload failed for \(previewItem.s3Key): \(error.localizedDescription)")
-            }
-        }
-
-        // Fallback: local album art (cover.jpg, folder.png, etc.)
-        if embeddedArtworkUrl == nil {
-            let dirPath = fileURL.deletingLastPathComponent().path
-            let cached = await localArtworkCache.getCachedURL(for: dirPath)
-            if cached.isCached {
-                embeddedArtworkUrl = cached.url
-            } else if let localArt = artworkExtractor.extractFromDirectory(fileURL.deletingLastPathComponent()) {
-                do {
-                    let uploadedUrl = try await storageService.uploadArtworkBytes(
-                        localArt.data,
-                        mimeType: localArt.mimeType,
-                        artist: previewItem.artist,
-                        album: previewItem.album
-                    )
-                    await localArtworkCache.cacheURL(uploadedUrl, for: dirPath)
-                    embeddedArtworkUrl = uploadedUrl
-                } catch {
-                    print("⚠️ Local artwork upload failed for \(previewItem.s3Key): \(error.localizedDescription)")
-                    await localArtworkCache.cacheURL(nil, for: dirPath)
-                }
-            } else {
-                await localArtworkCache.cacheURL(nil, for: dirPath)
-            }
-        }
+        let embeddedArtworkUrl = await resolveArtwork(
+            for: fileURL,
+            artist: previewItem.artist,
+            album: previewItem.album,
+            s3Key: previewItem.s3Key,
+            artworkExtractor: artworkExtractor,
+            storageService: storageService,
+            localArtworkCache: localArtworkCache
+        )
 
         // Upload file with corrected S3 key
         do {
@@ -1238,6 +1195,58 @@ class MusicUploader {
             print("⚠️ Could not fetch existing catalog: \(error.localizedDescription)")
             return CatalogFetchResult(existingKeys: [], addedAtMap: [:], correctedNames: [:])
         }
+    }
+
+    // MARK: - Artwork Resolution
+
+    /// Extract artwork from audio file or directory, upload to S3, and return the CDN URL.
+    /// Tries embedded artwork first, then falls back to directory-level art (cover.jpg, folder.png).
+    private func resolveArtwork(
+        for fileURL: URL,
+        artist: String,
+        album: String,
+        s3Key: String,
+        artworkExtractor: ArtworkExtractor,
+        storageService: StorageService,
+        localArtworkCache: LocalArtworkCache
+    ) async -> String? {
+        // Embedded artwork from the audio file
+        if let artwork = await artworkExtractor.extract(from: fileURL) {
+            do {
+                return try await storageService.uploadArtworkBytes(
+                    artwork.data,
+                    mimeType: artwork.mimeType,
+                    artist: artist,
+                    album: album
+                )
+            } catch {
+                print("⚠️ Artwork upload failed for \(s3Key): \(error.localizedDescription)")
+            }
+        }
+
+        // Fallback: directory-level album art (cover.jpg, folder.png, etc.)
+        let dirPath = fileURL.deletingLastPathComponent().path
+        let cached = await localArtworkCache.getCachedURL(for: dirPath)
+        if cached.isCached {
+            return cached.url
+        } else if let localArt = artworkExtractor.extractFromDirectory(fileURL.deletingLastPathComponent()) {
+            do {
+                let uploadedUrl = try await storageService.uploadArtworkBytes(
+                    localArt.data,
+                    mimeType: localArt.mimeType,
+                    artist: artist,
+                    album: album
+                )
+                await localArtworkCache.cacheURL(uploadedUrl, for: dirPath)
+                return uploadedUrl
+            } catch {
+                await localArtworkCache.cacheURL(nil, for: dirPath)
+            }
+        } else {
+            await localArtworkCache.cacheURL(nil, for: dirPath)
+        }
+
+        return nil
     }
 
     // MARK: - Save Catalog to SwiftData and CDN
