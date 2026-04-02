@@ -130,7 +130,8 @@ actor CatalogBuilder {
             return results.sorted { $0.0 < $1.0 }.map { $0.1 }
         }
 
-        return (catalogArtists, tracks.count)
+        let actualTrackCount = catalogArtists.flatMap { $0.albums ?? [] }.reduce(0) { $0 + ($1.tracks?.count ?? 0) }
+        return (catalogArtists, actualTrackCount)
     }
 
     // MARK: - Build Artist
@@ -181,8 +182,8 @@ actor CatalogBuilder {
         // Merge albums that ended up with the same ID after API name corrections
         let mergedAlbums = mergeAlbumsByID(catalogAlbums)
 
-        // Use MusicBrainz primary artist name if available (majority vote)
-        let mbArtistNames = albumResults.compactMap(\.1)
+        // Use MusicBrainz primary artist name if available (majority vote, non-empty only)
+        let mbArtistNames = albumResults.compactMap(\.1).filter { !$0.isEmpty }
         let correctedName: String
         if let mostCommon = Dictionary(grouping: mbArtistNames, by: { $0 })
             .max(by: { $0.value.count < $1.value.count })?.key {
