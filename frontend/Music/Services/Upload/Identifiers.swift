@@ -88,18 +88,37 @@ enum Identifiers {
 
     // MARK: - Artist Name Normalization
 
-    /// Normalize artist name by extracting first artist from multi-artist strings.
+    /// Normalize artist name by extracting the primary artist from multi-artist strings.
     ///
-    /// Splits by "/" and returns the first artist, stripped of whitespace.
-    /// Example: "Justin Timberlake/50 Cent" -> "Justin Timberlake"
+    /// Handles delimiters (";", "/", ",") and feature tags ("featuring", "feat.", "ft.").
+    /// Examples:
+    /// - "CyHi; 2 Chainz" -> "CyHi"
+    /// - "Lil Wayne Featuring Babyface" -> "Lil Wayne"
+    /// - "Drake feat. Rihanna" -> "Drake"
+    /// - "Justin Timberlake/50 Cent" -> "Justin Timberlake"
+    /// - "Kanye West, Kid Cudi" -> "Kanye West"
     ///
     /// - Parameter name: The artist name to normalize
     /// - Returns: Normalized artist name, or nil if input is nil
     static func normalizeArtistName(_ name: String?) -> String? {
         guard let name = name, !name.isEmpty else { return name }
 
-        if name.contains("/") {
-            return name.components(separatedBy: "/").first?.trimmingCharacters(in: .whitespaces)
+        // Character delimiters: split on first occurrence
+        for delimiter in [";", "/", ","] {
+            if name.contains(delimiter) {
+                return name.components(separatedBy: delimiter).first?.trimmingCharacters(in: .whitespaces)
+            }
+        }
+
+        // Word-based feature tags (case-insensitive)
+        let featurePatterns = [" featuring ", " feat. ", " feat ", " ft. ", " ft "]
+        let lowered = name.lowercased()
+        for pattern in featurePatterns {
+            if let range = lowered.range(of: pattern) {
+                let primaryEnd = name.index(name.startIndex, offsetBy: lowered.distance(from: lowered.startIndex, to: range.lowerBound))
+                let primary = String(name[name.startIndex..<primaryEnd]).trimmingCharacters(in: .whitespaces)
+                if !primary.isEmpty { return primary }
+            }
         }
 
         return name.trimmingCharacters(in: .whitespaces)
@@ -114,6 +133,29 @@ enum Identifiers {
     static func getArtistGroupingKey(_ name: String) -> String {
         let normalized = normalizeArtistName(name)
         return normalized?.lowercased() ?? ""
+    }
+
+    /// Get normalized key for album grouping.
+    ///
+    /// Lowercases, trims whitespace, strips parenthetical/bracketed suffixes
+    /// like "(Deluxe Edition)", "[Remastered]", then sanitizes for S3.
+    ///
+    /// Examples:
+    /// - "1000 Forms of Fear" and "1000 Forms Of Fear (Deluxe)" -> same key
+    /// - "Reasonable Woman" and "reasonable woman" -> same key
+    ///
+    /// - Parameter name: The album name
+    /// - Returns: Normalized album name for grouping
+    static func getAlbumGroupingKey(_ name: String) -> String {
+        var key = name.lowercased()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        // Strip all parenthetical/bracketed suffixes: (Deluxe Edition), [Remastered], etc.
+        key = key.replacingOccurrences(
+            of: #"\s*[\(\[][^\)\]]*[\)\]]"#,
+            with: "",
+            options: .regularExpression
+        )
+        return sanitizeS3Key(key)
     }
 
     // MARK: - S3 Key Generation

@@ -25,7 +25,7 @@ struct HomeView: View {
                 VStack(alignment: .leading, spacing: 24) {
                     topTracksSection
                     recentlyPlayedSection
-                    recentlyAddedSection
+                    playlistsSection
                     genreBrowseSection
                 }
                 .padding()
@@ -203,61 +203,58 @@ struct HomeView: View {
         }
     }
 
-    // MARK: - Recently Added Section
+    // MARK: - Playlists Section
 
-    private var recentlyAddedSection: some View {
+    private var playlistsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("Recently Added")
+                Text("Playlists")
                     .font(.title2)
                     .fontWeight(.bold)
                 Spacer()
-                NavigationLink {
-                    RecentlyAddedView(
-                        musicService: musicService,
-                        playerService: playerService,
-                        cacheService: cacheService
-                    )
-                } label: {
-                    Text("See All")
-                        .font(.subheadline)
+                if playlists.count > 3 {
+                    NavigationLink {
+                        ManualPlaylistsListView(
+                            musicService: musicService,
+                            playerService: playerService,
+                            cacheService: cacheService
+                        )
+                    } label: {
+                        Text("See All")
+                            .font(.subheadline)
+                    }
                 }
             }
 
-            let recentTracks = Array(musicService.recentlyAddedSongs.prefix(5))
-
-            if recentTracks.isEmpty {
-                Text("Upload music to see recently added tracks")
+            if playlists.isEmpty {
+                Text("Create a playlist to organize your music")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .padding(.vertical, 8)
             } else {
-                ForEach(Array(recentTracks.enumerated()), id: \.element.s3Key) { index, track in
-                    let isPlayable = playerService.isTrackPlayable(track)
-                    Button {
-                        if isPlayable {
-                            playerService.play(track: track, queue: musicService.recentlyAddedSongs)
-                        }
-                    } label: {
-                        SongRow.recentlyAdded(
-                            track: track,
-                            playerService: playerService,
-                            cacheService: cacheService,
+                ForEach(Array(playlists.prefix(3).enumerated()), id: \.element.id) { index, playlist in
+                    NavigationLink {
+                        PlaylistDetailView(
+                            playlist: playlist,
                             musicService: musicService,
-                            isPlayable: isPlayable,
-                            onNavigate: navigate
+                            playerService: playerService,
+                            cacheService: cacheService
                         )
+                    } label: {
+                        PlaylistRowView(playlist: playlist, cacheService: cacheService)
                     }
                     .buttonStyle(.plain)
-                    .disabled(!isPlayable)
 
-                    if index < recentTracks.count - 1 {
+                    if index < min(playlists.count, 3) - 1 {
                         Divider()
-                            .padding(.leading, 60)
                     }
                 }
             }
         }
+    }
+
+    private var playlists: [PlaylistEntity] {
+        PlaylistStore.shared.playlists
     }
 
     // MARK: - Genre Browse Section

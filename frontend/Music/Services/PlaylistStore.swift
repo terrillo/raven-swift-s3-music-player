@@ -31,14 +31,12 @@ class PlaylistStore {
     @discardableResult
     func createPlaylist(
         name: String,
-        description: String? = nil,
-        coverImageUrl: String? = nil
+        description: String? = nil
     ) -> PlaylistEntity {
         let entity = PlaylistEntity(context: viewContext)
         entity.id = UUID()
         entity.name = name
         entity.playlistDescription = description
-        entity.coverImageUrl = coverImageUrl
         entity.createdAt = Date()
         entity.modifiedAt = Date()
 
@@ -49,17 +47,13 @@ class PlaylistStore {
     func updatePlaylist(
         _ playlist: PlaylistEntity,
         name: String? = nil,
-        description: String? = nil,
-        coverImageUrl: String? = nil
+        description: String? = nil
     ) {
         if let name = name {
             playlist.name = name
         }
         if let description = description {
             playlist.playlistDescription = description
-        }
-        if let coverImageUrl = coverImageUrl {
-            playlist.coverImageUrl = coverImageUrl
         }
         playlist.modifiedAt = Date()
 

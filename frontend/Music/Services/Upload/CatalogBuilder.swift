@@ -85,10 +85,11 @@ actor CatalogBuilder {
             if artistAlbums[artistKey] == nil {
                 artistAlbums[artistKey] = [:]
             }
-            if artistAlbums[artistKey]?[track.album] == nil {
-                artistAlbums[artistKey]?[track.album] = []
+            let albumKey = Identifiers.getAlbumGroupingKey(track.album)
+            if artistAlbums[artistKey]?[albumKey] == nil {
+                artistAlbums[artistKey]?[albumKey] = []
             }
-            artistAlbums[artistKey]?[track.album]?.append(track)
+            artistAlbums[artistKey]?[albumKey]?.append(track)
         }
 
         // Build catalog structure - process artists in parallel
@@ -144,24 +145,24 @@ actor CatalogBuilder {
             artistDetails = await musicBrainz.getArtistDetails(name)
         }
 
-        // Build albums in parallel
+        // Build albums in parallel, collecting MusicBrainz primary artist names
         let sortedAlbumNames = albumsDict.keys.sorted()
 
-        let catalogAlbums: [CatalogAlbum] = await withTaskGroup(of: (Int, CatalogAlbum)?.self) { group in
-            var results: [(Int, CatalogAlbum)] = []
+        let albumResults: [(CatalogAlbum, String?)] = await withTaskGroup(of: (Int, CatalogAlbum, String?)?.self) { group in
+            var results: [(Int, CatalogAlbum, String?)] = []
             results.reserveCapacity(sortedAlbumNames.count)
 
             for (index, albumName) in sortedAlbumNames.enumerated() {
                 guard let albumTracks = albumsDict[albumName] else { continue }
 
                 group.addTask {
-                    let album = await self.buildAlbum(
+                    let (album, mbPrimaryArtist) = await self.buildAlbum(
                         artistName: name,
                         albumName: albumName,
                         tracks: albumTracks,
                         artistGenre: artistInfo.genre
                     )
-                    return (index, album)
+                    return (index, album, mbPrimaryArtist)
                 }
             }
 
@@ -172,13 +173,28 @@ actor CatalogBuilder {
             }
 
             // Sort by original index to maintain album order
-            return results.sorted { $0.0 < $1.0 }.map { $0.1 }
+            return results.sorted { $0.0 < $1.0 }.map { ($0.1, $0.2) }
         }
 
-        let artistId = Identifiers.sanitizeS3Key(name)
+        let catalogAlbums = albumResults.map(\.0)
+
+        // Merge albums that ended up with the same ID after API name corrections
+        let mergedAlbums = mergeAlbumsByID(catalogAlbums)
+
+        // Use MusicBrainz primary artist name if available (majority vote)
+        let mbArtistNames = albumResults.compactMap(\.1)
+        let correctedName: String
+        if let mostCommon = Dictionary(grouping: mbArtistNames, by: { $0 })
+            .max(by: { $0.value.count < $1.value.count })?.key {
+            correctedName = mostCommon
+        } else {
+            correctedName = name
+        }
+
+        let artistId = Identifiers.sanitizeS3Key(correctedName)
         let artist = CatalogArtist(
             id: artistId,
-            name: name,
+            name: correctedName,
             bio: artistInfo.bio,
             imageUrl: artistInfo.imageUrl,
             genre: artistInfo.genre,
@@ -192,13 +208,54 @@ actor CatalogBuilder {
         )
 
         // Link albums to artist
-        for album in catalogAlbums {
+        for album in mergedAlbums {
             album.artist = artist
             if artist.albums == nil { artist.albums = [] }
             artist.albums?.append(album)
         }
 
         return artist
+    }
+
+    // MARK: - Merge Duplicate Albums
+
+    /// Merge albums that share the same ID (e.g., after TheAudioDB corrects different
+    /// raw album names to the same canonical name).
+    private func mergeAlbumsByID(_ albums: [CatalogAlbum]) -> [CatalogAlbum] {
+        var merged: [String: CatalogAlbum] = [:]
+        var insertionOrder: [String] = []
+        for album in albums {
+            if let existing = merged[album.id] {
+                let existingKeys = Set((existing.tracks ?? []).map(\.s3Key))
+                let newTracks = (album.tracks ?? []).filter { !existingKeys.contains($0.s3Key) }
+                existing.tracks = (existing.tracks ?? []) + newTracks
+                existing.imageUrl = existing.imageUrl ?? album.imageUrl
+                existing.wiki = existing.wiki ?? album.wiki
+                existing.releaseDate = existing.releaseDate ?? album.releaseDate
+                existing.genre = existing.genre ?? album.genre
+                existing.style = existing.style ?? album.style
+                existing.mood = existing.mood ?? album.mood
+                existing.theme = existing.theme ?? album.theme
+                existing.releaseType = existing.releaseType ?? album.releaseType
+                existing.country = existing.country ?? album.country
+                existing.label = existing.label ?? album.label
+                existing.barcode = existing.barcode ?? album.barcode
+                existing.mediaFormat = existing.mediaFormat ?? album.mediaFormat
+            } else {
+                merged[album.id] = album
+                insertionOrder.append(album.id)
+            }
+        }
+        // Re-sort tracks by disc/track number within each merged album
+        for album in merged.values {
+            album.tracks?.sort {
+                let disc0 = $0.discNumber ?? 1
+                let disc1 = $1.discNumber ?? 1
+                if disc0 != disc1 { return disc0 < disc1 }
+                return ($0.trackNumber ?? 999) < ($1.trackNumber ?? 999)
+            }
+        }
+        return insertionOrder.compactMap { merged[$0] }
     }
 
     // MARK: - Build Album
@@ -208,7 +265,7 @@ actor CatalogBuilder {
         albumName: String,
         tracks: [ProcessedTrack],
         artistGenre: String?
-    ) async -> CatalogAlbum {
+    ) async -> (CatalogAlbum, String?) {
         // Sort tracks by track number
         let sortedTracks = tracks.sorted { ($0.trackNumber ?? 999) < ($1.trackNumber ?? 999) }
 
@@ -353,7 +410,7 @@ actor CatalogBuilder {
             album.tracks?.append(track)
         }
 
-        return album
+        return (album, releaseDetails?.primaryArtist)
     }
 
     // MARK: - Helper Methods

@@ -44,8 +44,9 @@ struct ReleaseDetails: Codable {
     var barcode: String?
     var mediaFormat: String?  // CD, vinyl, digital
     var tags: [String] = []
+    var primaryArtist: String?  // First artist from artist-credits
 
-    init(mbid: String? = nil, title: String? = nil, releaseDate: Int? = nil, releaseType: String? = nil, country: String? = nil, label: String? = nil, barcode: String? = nil, mediaFormat: String? = nil, tags: [String] = []) {
+    init(mbid: String? = nil, title: String? = nil, releaseDate: Int? = nil, releaseType: String? = nil, country: String? = nil, label: String? = nil, barcode: String? = nil, mediaFormat: String? = nil, tags: [String] = [], primaryArtist: String? = nil) {
         self.mbid = mbid
         self.title = title
         self.releaseDate = releaseDate
@@ -55,6 +56,7 @@ struct ReleaseDetails: Codable {
         self.barcode = barcode
         self.mediaFormat = mediaFormat
         self.tags = tags
+        self.primaryArtist = primaryArtist
     }
 }
 
@@ -334,13 +336,13 @@ actor MusicBrainzService {
 
     private func searchRelease(_ artistName: String, _ albumName: String) async -> ReleaseDetails {
         // Try exact search first
-        var (mbid, title) = await searchReleaseExact(artistName, albumName)
+        var (mbid, title, primaryArtist) = await searchReleaseExact(artistName, albumName)
 
         // Try fuzzy search with cleaned album name
         if mbid == nil {
             let cleanedAlbum = cleanAlbumName(albumName)
             if cleanedAlbum != albumName {
-                (mbid, title) = await searchReleaseFuzzy(artistName, cleanedAlbum)
+                (mbid, title, primaryArtist) = await searchReleaseFuzzy(artistName, cleanedAlbum)
             }
         }
 
@@ -348,28 +350,33 @@ actor MusicBrainzService {
             return ReleaseDetails()
         }
 
-        return await fetchReleaseDetails(releaseMBID, title: title)
+        var details = await fetchReleaseDetails(releaseMBID, title: title)
+        // Use search-result primary artist if release details didn't have one
+        if details.primaryArtist == nil {
+            details.primaryArtist = primaryArtist
+        }
+        return details
     }
 
-    private func searchReleaseExact(_ artistName: String, _ albumName: String) async -> (String?, String?) {
+    private func searchReleaseExact(_ artistName: String, _ albumName: String) async -> (String?, String?, String?) {
         let safeArtist = escapeLucene(artistName)
         let safeAlbum = escapeLucene(albumName)
         let query = "release:\"\(safeAlbum)\" AND artist:\"\(safeArtist)\""
         return await doReleaseSearch(query)
     }
 
-    private func searchReleaseFuzzy(_ artistName: String, _ albumName: String) async -> (String?, String?) {
+    private func searchReleaseFuzzy(_ artistName: String, _ albumName: String) async -> (String?, String?, String?) {
         let safeArtist = escapeLucene(artistName)
         let safeAlbum = escapeLucene(albumName)
         let query = "release:\(safeAlbum) AND artist:\(safeArtist)"
         return await doReleaseSearch(query)
     }
 
-    private func doReleaseSearch(_ query: String) async -> (String?, String?) {
+    private func doReleaseSearch(_ query: String) async -> (mbid: String?, title: String?, primaryArtist: String?) {
         guard let data = await makeRequest("release", params: ["query": query, "limit": "5"]),
               let releases = data["releases"] as? [[String: Any]],
               !releases.isEmpty else {
-            return (nil, nil)
+            return (nil, nil, nil)
         }
 
         // Score results by MusicBrainz score and return the best
@@ -385,14 +392,26 @@ actor MusicBrainzService {
         }
 
         guard let release = bestRelease else {
-            return (nil, nil)
+            return (nil, nil, nil)
         }
 
-        return (release["id"] as? String, release["title"] as? String)
+        let primaryArtist = extractPrimaryArtist(from: release)
+        return (release["id"] as? String, release["title"] as? String, primaryArtist)
+    }
+
+    /// Extract the primary artist name from a MusicBrainz artist-credit array.
+    /// The first entry is the primary artist; subsequent entries are featured/collaborators.
+    private func extractPrimaryArtist(from data: [String: Any]) -> String? {
+        guard let credits = data["artist-credit"] as? [[String: Any]],
+              let first = credits.first,
+              let artist = first["artist"] as? [String: Any] else {
+            return nil
+        }
+        return artist["name"] as? String
     }
 
     private func fetchReleaseDetails(_ mbid: String, title: String?) async -> ReleaseDetails {
-        guard let data = await makeRequest("release/\(mbid)", params: ["inc": "labels+media+release-groups+tags"]) else {
+        guard let data = await makeRequest("release/\(mbid)", params: ["inc": "labels+media+release-groups+tags+artist-credits"]) else {
             return ReleaseDetails(mbid: mbid, title: title)
         }
 
@@ -429,7 +448,8 @@ actor MusicBrainzService {
             label: label,
             barcode: data["barcode"] as? String,
             mediaFormat: mediaFormat,
-            tags: tags
+            tags: tags,
+            primaryArtist: extractPrimaryArtist(from: data)
         )
     }
 

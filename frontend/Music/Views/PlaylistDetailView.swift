@@ -18,6 +18,9 @@ struct PlaylistDetailView: View {
     @State private var showingRecommendations = false
     @State private var pendingNavigation: NavigationDestination?
     @State private var shouldDismiss = false
+    #if os(iOS)
+    @State private var editMode = EditMode.inactive
+    #endif
 
     @Environment(\.dismiss) private var dismiss
 
@@ -48,112 +51,33 @@ struct PlaylistDetailView: View {
         resolvedTracks.compactMap { $0.track?.duration }.reduce(0, +)
     }
 
+    private var isEditing: Bool {
+        #if os(iOS)
+        return editMode == .active
+        #else
+        return false
+        #endif
+    }
+
+    private var subtitle: String {
+        let count = playlistTracks.count
+        let songs = count == 1 ? "1 song" : "\(count) songs"
+        guard totalDuration > 0 else { return songs }
+        let hours = totalDuration / 3600
+        let minutes = (totalDuration % 3600) / 60
+        if hours > 0 {
+            return "\(songs) • \(hours)h \(minutes)m"
+        } else {
+            return "\(songs) • \(minutes) min"
+        }
+    }
+
     var body: some View {
         Group {
             if playlistTracks.isEmpty {
-                VStack(spacing: 20) {
-                    PlaylistHeaderView(
-                        playlist: playlist,
-                        trackCount: 0,
-                        totalDuration: 0,
-                        hasPlayableTracks: false,
-                        onPlay: {},
-                        onShuffle: {},
-                        onEdit: { showingEditSheet = true },
-                        onRecommendations: { showingRecommendations = true }
-                    )
-
-                    ContentUnavailableView {
-                        Label("No Songs", systemImage: "music.note")
-                    } description: {
-                        Text("Add songs to your playlist")
-                    } actions: {
-                        Button {
-                            showingAddTracks = true
-                        } label: {
-                            Label("Add Songs", systemImage: "plus")
-                        }
-                        .buttonStyle(.bordered)
-                    }
-                }
+                emptyPlaylistView
             } else {
-                List {
-                    Section {
-                        PlaylistHeaderView(
-                            playlist: playlist,
-                            trackCount: playlistTracks.count,
-                            totalDuration: totalDuration,
-                            hasPlayableTracks: hasPlayableTracks,
-                            onPlay: playAll,
-                            onShuffle: shuffleAll,
-                            onEdit: { showingEditSheet = true },
-                            onRecommendations: { showingRecommendations = true }
-                        )
-                        .listRowInsets(EdgeInsets())
-                        .listRowBackground(Color.clear)
-                    }
-
-                    Section {
-                        ForEach(resolvedTracks, id: \.entity.id) { pair in
-                            if let track = pair.track {
-                                let isPlayable = playerService.isTrackPlayable(track)
-
-                                Button {
-                                    if isPlayable {
-                                        playerService.play(track: track, queue: playableTracks)
-                                    }
-                                } label: {
-                                    SongRow.songs(
-                                        track: track,
-                                        playerService: playerService,
-                                        cacheService: cacheService,
-                                        musicService: musicService,
-                                        isPlayable: isPlayable,
-                                        onNavigate: { pendingNavigation = $0 }
-                                    )
-                                }
-                                .buttonStyle(.plain)
-                                .disabled(!isPlayable)
-                                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                    Button(role: .destructive) {
-                                        removeTrack(pair.entity)
-                                    } label: {
-                                        Label("Remove", systemImage: "trash")
-                                    }
-                                }
-                                .contextMenu {
-                                    Button(role: .destructive) {
-                                        removeTrack(pair.entity)
-                                    } label: {
-                                        Label("Remove from Playlist", systemImage: "minus.circle")
-                                    }
-                                }
-                            } else {
-                                // Track not found in catalog (deleted?)
-                                HStack {
-                                    Image(systemName: "exclamationmark.triangle")
-                                        .foregroundStyle(.orange)
-                                    VStack(alignment: .leading) {
-                                        Text(pair.entity.trackTitle ?? "Unknown Track")
-                                            .font(.body)
-                                        Text("Track not found in catalog")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                    Spacer()
-                                }
-                                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                    Button(role: .destructive) {
-                                        removeTrack(pair.entity)
-                                    } label: {
-                                        Label("Remove", systemImage: "trash")
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                .listStyle(.plain)
+                trackListView
             }
         }
         .navigationTitle(playlist.name ?? "Playlist")
@@ -162,12 +86,46 @@ struct PlaylistDetailView: View {
         #endif
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                Button {
-                    showingAddTracks = true
+                Menu {
+                    Button {
+                        showingAddTracks = true
+                    } label: {
+                        Label("Add Songs", systemImage: "plus")
+                    }
+
+                    #if os(iOS)
+                    Button {
+                        withAnimation {
+                            editMode = editMode == .active ? .inactive : .active
+                        }
+                    } label: {
+                        Label(
+                            editMode == .active ? "Done Reordering" : "Reorder",
+                            systemImage: "arrow.up.arrow.down"
+                        )
+                    }
+                    #endif
+
+                    Button {
+                        showingRecommendations = true
+                    } label: {
+                        Label("Suggestions", systemImage: "wand.and.stars")
+                    }
+
+                    Divider()
+
+                    Button {
+                        showingEditSheet = true
+                    } label: {
+                        Label("Edit Playlist", systemImage: "pencil")
+                    }
                 } label: {
-                    Image(systemName: "plus")
+                    Image(systemName: "ellipsis.circle")
                 }
             }
+        }
+        .toolbarTitleMenu {
+            Text(subtitle)
         }
         .sheet(isPresented: $showingEditSheet) {
             EditPlaylistSheet(playlist: playlist) {
@@ -214,6 +172,98 @@ struct PlaylistDetailView: View {
         }
     }
 
+    private var emptyPlaylistView: some View {
+        ContentUnavailableView {
+            Label("No Songs", systemImage: "music.note")
+        } description: {
+            Text("Add songs to your playlist")
+        } actions: {
+            Button {
+                showingAddTracks = true
+            } label: {
+                Label("Add Songs", systemImage: "plus")
+            }
+            .buttonStyle(.bordered)
+        }
+    }
+
+    private var trackListView: some View {
+        List {
+            Section {
+                PlaylistHeaderView(
+                    hasPlayableTracks: hasPlayableTracks,
+                    onPlay: playAll,
+                    onShuffle: shuffleAll
+                )
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
+            }
+
+            Section {
+                ForEach(resolvedTracks, id: \.entity.id) { pair in
+                    if let track = pair.track {
+                        let isPlayable = playerService.isTrackPlayable(track)
+
+                        SongRow.songs(
+                            track: track,
+                            playerService: playerService,
+                            cacheService: cacheService,
+                            musicService: musicService,
+                            isPlayable: isPlayable,
+                            onNavigate: { pendingNavigation = $0 }
+                        )
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            if isPlayable && !isEditing {
+                                playerService.play(track: track, queue: playableTracks)
+                            }
+                        }
+                        .disabled(!isPlayable)
+                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                            Button(role: .destructive) {
+                                removeTrack(pair.entity)
+                            } label: {
+                                Label("Remove", systemImage: "trash")
+                            }
+                        }
+                        .contextMenu {
+                            Button(role: .destructive) {
+                                removeTrack(pair.entity)
+                            } label: {
+                                Label("Remove from Playlist", systemImage: "minus.circle")
+                            }
+                        }
+                    } else {
+                        HStack {
+                            Image(systemName: "exclamationmark.triangle")
+                                .foregroundStyle(.orange)
+                            VStack(alignment: .leading) {
+                                Text(pair.entity.trackTitle ?? "Unknown Track")
+                                    .font(.body)
+                                Text("Track not found in catalog")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                        }
+                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                            Button(role: .destructive) {
+                                removeTrack(pair.entity)
+                            } label: {
+                                Label("Remove", systemImage: "trash")
+                            }
+                        }
+                    }
+                }
+                .onMove(perform: moveTrack)
+            }
+        }
+        .listStyle(.plain)
+        #if os(iOS)
+        .environment(\.editMode, $editMode)
+        #endif
+    }
+
     private func playAll() {
         guard let firstTrack = playableTracks.first else { return }
         playerService.play(track: firstTrack, queue: playableTracks)
@@ -221,6 +271,10 @@ struct PlaylistDetailView: View {
 
     private func shuffleAll() {
         playerService.shufflePlay(queue: playableTracks)
+    }
+
+    private func moveTrack(from source: IndexSet, to destination: Int) {
+        PlaylistStore.shared.reorderTracks(in: playlist, from: source, to: destination)
     }
 
     private func removeTrack(_ trackEntity: PlaylistTrackEntity) {
