@@ -275,17 +275,19 @@ actor CatalogBuilder {
 
         // === Fetch metadata from all sources IN PARALLEL ===
 
+        let originalAlbumName = sortedTracks.first?.album ?? albumName
+
         // Start all API lookups concurrently
-        async let albumInfoTask = theAudioDB.fetchAlbumInfo(artist: artistName, album: albumName)
+        async let albumInfoTask = theAudioDB.fetchAlbumInfo(artist: artistName, album: originalAlbumName)
         async let releaseDetailsTask: ReleaseDetails? = {
             if let musicBrainz = musicBrainz {
-                return await musicBrainz.getReleaseDetails(artist: artistName, album: albumName)
+                return await musicBrainz.getReleaseDetails(artist: artistName, album: originalAlbumName)
             }
             return nil
         }()
         async let lastFMInfoTask: AlbumInfo? = {
             if let lastFM = lastFM {
-                return await lastFM.fetchAlbumInfo(artist: artistName, album: albumName)
+                return await lastFM.fetchAlbumInfo(artist: artistName, album: originalAlbumName)
             }
             return nil
         }()
@@ -309,11 +311,11 @@ actor CatalogBuilder {
         // === Apply cascade for each field ===
         // Priority: TheAudioDB → MusicBrainz → LastFM → Local file metadata
 
-        // Album name cascade: TheAudioDB → MusicBrainz → LastFM → local folder
         let displayAlbumName = firstNonEmpty(
             albumInfo.name,
             releaseDetails?.title,
-            lastFMInfo?.name
+            lastFMInfo?.name,
+            originalAlbumName
         ) ?? albumName
 
         // Wiki cascade: TheAudioDB → LastFM
